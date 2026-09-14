@@ -6,8 +6,12 @@
 #define AIR 3800
 #define WATER 1400
 #define SOIL_PIN 4
-#define SLEEP 3
+#define ENERGY_PIN 3
+#define SLEEP 3600
 #define LED_PIN 8
+#define PEER_CHANNEL 11
+#define SENSOR_ID 1
+#define PLANT_NAME "FICUS"
 
 uint8_t broadcastAddress[] = {0x9C, 0x9E, 0x6E, 0xE2, 0xDE, 0x1C};
 
@@ -40,18 +44,21 @@ int getAverageMeasurment(int samples) {
 
 void setup(){
   Serial.begin(115200);
-
+  pinMode(ENERGY_PIN, OUTPUT);
+  digitalWrite(ENERGY_PIN, HIGH);
+  delay(100);
+  
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
 
   WiFi.mode(WIFI_MODE_STA);
-  esp_wifi_set_channel(11, WIFI_SECOND_CHAN_NONE);
+  esp_wifi_set_channel(PEER_CHANNEL, WIFI_SECOND_CHAN_NONE);
   if (esp_now_init() != ESP_OK) return;
 
   esp_now_register_send_cb(onDataSend);
 
   memcpy(peerInfo.peer_addr, broadcastAddress, 6);
-  peerInfo.channel = 11;
+  peerInfo.channel = PEER_CHANNEL;
   peerInfo.encrypt = false;
 
   if (esp_now_add_peer(&peerInfo) != ESP_OK){
@@ -59,11 +66,12 @@ void setup(){
   }
 
   digitalWrite(LED_PIN, HIGH);
-  int average = getAverageMeasurment(10);
-  double percentage = calculate_percentage(average);
+  double percentage = calculate_percentage(getAverageMeasurment(10));
 
-  plantData.ID = 1;
-  strcpy(plantData.plant, "MONSTERA");
+  digitalWrite(ENERGY_PIN, LOW);
+
+  plantData.ID = SENSOR_ID;
+  strcpy(plantData.plant, PLANT_NAME);
   plantData.measurment = percentage;
 
   esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *) &plantData, sizeof(plantData));
@@ -78,4 +86,3 @@ void setup(){
 }
 
 void loop() {}
-
