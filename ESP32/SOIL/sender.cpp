@@ -1,11 +1,13 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_now.h>
+#include <esp_wifi.h>
 
 #define AIR 3800
 #define WATER 1400
 #define SOIL_PIN 4
 #define SLEEP 3
+#define LED_PIN 8
 
 uint8_t broadcastAddress[] = {0x9C, 0x9E, 0x6E, 0xE2, 0xDE, 0x1C};
 
@@ -38,21 +40,25 @@ int getAverageMeasurment(int samples) {
 
 void setup(){
   Serial.begin(115200);
-  WiFi.mode(WIFI_STA);
-  if (esp_now_init() != ESP_OK) {
-    return;
-  }
+
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+
+  WiFi.mode(WIFI_MODE_STA);
+  esp_wifi_set_channel(11, WIFI_SECOND_CHAN_NONE);
+  if (esp_now_init() != ESP_OK) return;
 
   esp_now_register_send_cb(onDataSend);
 
   memcpy(peerInfo.peer_addr, broadcastAddress, 6);
-  peerInfo.channel = 0;
+  peerInfo.channel = 11;
   peerInfo.encrypt = false;
 
   if (esp_now_add_peer(&peerInfo) != ESP_OK){
     return;
   }
 
+  digitalWrite(LED_PIN, HIGH);
   int average = getAverageMeasurment(10);
   double percentage = calculate_percentage(average);
 
@@ -62,6 +68,7 @@ void setup(){
 
   esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *) &plantData, sizeof(plantData));
 
+  digitalWrite(LED_PIN, LOW);
   Serial.flush();
   Serial.end();
   delay(100);
