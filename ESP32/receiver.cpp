@@ -8,6 +8,7 @@
 #define LED_PIN 8
 
 typedef struct struct_message {
+  char type[16];
   int ID;
   char plant[32];
   float measurment;
@@ -16,8 +17,8 @@ typedef struct struct_message {
 struct_message plantData;
 volatile bool newDataReceived = false;
 
-String makePayload(int ID, char *plant, double moisture) {
-  return "{\"sensor\":" + String(ID) + ",\"plant\":\"" + String(plant) + "\",\"moisture\":" + String(moisture) + "}";
+String makePayload(char *type, int ID, char *plant, double moisture) {
+  return "{\"type\":" + String(type) + \"sensor\":" + String(ID) + ",\"plant\":\"" + String(plant) + "\",\"moisture\":" + String(moisture) + "}";
 }
 
 void onDataReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {

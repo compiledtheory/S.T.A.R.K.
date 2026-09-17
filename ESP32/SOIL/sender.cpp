@@ -19,6 +19,7 @@ typedef struct struct_message {
   int ID;
   char plant[32];
   float measurment;
+  char type[16];
 } struct_message;
 
 struct_message plantData;
@@ -73,6 +74,7 @@ void setup(){
   plantData.ID = SENSOR_ID;
   strcpy(plantData.plant, PLANT_NAME);
   plantData.measurment = percentage;
+  strcpy(plantData.type, "Plant");
 
   esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *) &plantData, sizeof(plantData));
 
