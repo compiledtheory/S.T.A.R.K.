@@ -19,7 +19,7 @@ pub async fn ask_llm(messages: &[serde_json::Value]) -> Result<String, Box<dyn s
     let json_res: serde_json::Value = response.json().await?;
 
     if json_res.get("error").is_some() {
-        eprintln!("❌ GROQ API ERROR: {:#?}", json_res);
+        eprintln!("GROQ API ERROR: {:#?}", json_res);
     }
 
     let reply = json_res["choices"][0]["message"]["content"]
