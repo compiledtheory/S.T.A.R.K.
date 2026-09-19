@@ -4,10 +4,17 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+cpal = "0.18.2"
+dotenvy = "0.15.7"
 futures = "0.3.34"
+hound = "3.5.1"
+oww-rs = "0.3.3"
+reqwest = { version = "0.13.5", features = ["multipart", "json"] }
+ringbuf = "0.5.2"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 serial2-tokio = "0.1.25"
+silero-vad-rust = "6.2.2"
 tokio = { version = "1.53.1", features = ["full"] }
 tokio-util = { version = "0.7.19", features = ["codec"] }
