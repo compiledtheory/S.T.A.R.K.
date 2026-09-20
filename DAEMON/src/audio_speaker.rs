@@ -3,7 +3,7 @@ use std::sync::Arc;
 use cpal::{Device, StreamConfig, traits::{DeviceTrait, HostTrait, StreamTrait}};
 use ringbuf::{HeapRb, traits::{Consumer, Producer, Split}};
 
-pub async fn speak(tx: tokio::sync::mpsc::Sender<Arc<[i16]>>) -> cpal::Stream {
+pub async fn record(tx: tokio::sync::mpsc::Sender<Arc<[i16]>>) -> cpal::Stream {
     let host = cpal::default_host();
     let device =  host.input_devices()
         .expect("No input devices found on the system")

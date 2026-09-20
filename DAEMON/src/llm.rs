@@ -1,6 +1,21 @@
-use serde_json::json;
+use serde_json::{json, Value};
+use tokio::sync::mpsc::Sender;
 
-pub async fn ask_llm(messages: &[serde_json::Value]) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+use crate::conversation;
+
+
+pub async fn handle_ask_llm(messages: &mut Vec<serde_json::Value>, tx: Sender<String>) {
+    match ask_llm(messages).await {
+        Ok(response) => {
+            conversation::add_message(&response, "assistant", messages);
+            if let Err(err) = tx.send(response).await {
+                        eprintln!("Failed to send to TTS: {}", err)
+            }}
+        Err(err) => eprintln!("{}", err),   
+    }
+}
+
+async fn ask_llm(messages: &Vec<serde_json::Value>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let api_key = std::env::var("GROQ_API_KEY").expect("Groq API key not set in .env");
     let client = reqwest::Client::new();
 

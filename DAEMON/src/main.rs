@@ -4,7 +4,9 @@ mod serial_speaker;
 mod audio_speaker;
 mod audio_listener;
 mod stt;
+mod tts;
 mod llm;
+mod conversation;
 
 use silero_vad_rust::{VadIterator, load_silero_vad};
 use silero_vad_rust::silero_vad::utils_vad::VadIteratorParams;
@@ -13,8 +15,7 @@ use silero_vad_rust::silero_vad::utils_vad::VadIteratorParams;
 use tokio::sync::broadcast;
 use tokio::signal::unix::{signal, SignalKind};
 use std::sync::Arc;
-use serde_json::json;
-
+use serde_json::Value;
 use crate::enums::SensorMessage;
 
 
@@ -32,7 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     tokio::spawn(async move {
-        serial_speaker::speak("/dev/ttyACM0", sensor_tx).await;
+        serial_speaker::read("/dev/ttyACM0", sensor_tx).await;
     });
 
     tokio::spawn(async move {
@@ -41,50 +42,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let (record_tx, mut record_rx) = tokio::sync::mpsc::channel::<Arc<[i16]>>(100);
-    let _record_stream = audio_speaker::speak(record_tx).await;
 
-    let model = load_silero_vad()?;
-    let params = VadIteratorParams {threshold: 0.2, min_silence_duration_ms: 500, ..Default::default()};
-    let mut vad_iterator = VadIterator::new(model, params).expect("Failed to create iterator");
+    let (record_tx, mut record_rx) = tokio::sync::mpsc::channel::<Arc<[i16]>>(100);
+    let _record_stream = audio_speaker::record(record_tx).await;
+
+    let (transcribe_tx, mut transcribe_rx) = tokio::sync::mpsc::channel::<String>(100);
     
-    let (speak_tx, mut speak_rx) = tokio::sync::mpsc::channel::<String>(100);
     tokio::spawn(async move {
+        let wake_word = "hey jarvis";
+        let mut oww_model = oww_rs::oww::OwwModel::from_file("/home/compiledtheory/stark-daemon/stark-daemon/hey_jarvis_v0.1.onnx", wake_word.to_string(), 0.5)
+            .expect("Failed to load wakeword model");
+        let vad_model = load_silero_vad().expect("Failed to load model.");
+        let params = VadIteratorParams {threshold: 0.2, min_silence_duration_ms: 500, ..Default::default()};
         let mut speach_buffer = Vec::<i16>::new();
+        let mut oww_buffer = Vec::<f32>::new();
         let mut is_recording = false;
+        let mut vad_iterator = VadIterator::new(vad_model, params).expect("Failed to create iterator");
         while let Some(pcm_chunk) = record_rx.recv().await {
             audio_listener::listen(
-                &mut vad_iterator, 
-                &pcm_chunk,
+                &mut oww_model, 
+                &mut vad_iterator, &pcm_chunk,
                 &mut speach_buffer, 
+                &mut oww_buffer,
                 &mut is_recording,
-                speak_tx.clone(),  
-                ).await;
+                transcribe_tx.clone()).await;
+        }
+    });
+
+    let (speak_tx, mut speak_rx) = tokio::sync::mpsc::channel::<String>(100);
+    tokio::spawn(async move {
+        let mut conv: Vec<Value> = conversation::new_conversation();
+        loop {
+            match tokio::time::timeout(tokio::time::Duration::from_secs(30), transcribe_rx.recv()).await {
+                Ok(Some(msg)) => {
+                    if msg.is_empty() {continue};
+                    conversation::add_message(&msg, "user", &mut conv);
+                    llm::handle_ask_llm(&mut conv, speak_tx.clone()).await;
+                },
+                Ok(None) => break, 
+                Err(_) => {conversation::reset(&mut conv)},
+            }
         }
     });
 
     tokio::spawn(async move {
         while let Some(msg) = speak_rx.recv().await {
-            if msg.is_empty() {continue};
-
-            let payload = vec![
-                json!({
-                    "role": "system",
-                    "content": "You are S.T.A.R.K., an autonomous AI smart home daemon running on a Raspberry Pi. Keep your answers extremely concise, conversational, and designed to be spoken out loud. Never use markdown formatting.",
-                }),
-                json!({
-                    "role": "user",
-                    "content": msg.trim(),
-                })
-            ];
-
-            match llm::ask_llm(&payload).await {
-                Ok(response) => println!("{}", response),
-                Err(err) => eprintln!("{}", err),
+            match tts::speak(msg).await {
+                Ok(_) => {},
+                Err(err) => eprintln!("{}", err)
             }
         }
     });
-
 
     println!("S.T.A.R.K. daemon is running. Press Ctrl+C to exit.");
     shutdown_signal().await;
