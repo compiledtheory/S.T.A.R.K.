@@ -1,27 +1,31 @@
-mod enums;
+mod sensors;
 mod db;
 mod serial_speaker;
-mod audio_speaker;
-mod audio_listener;
+mod audio_service;
 mod stt;
 mod tts;
 mod llm;
-mod conversation;
-
-use silero_vad_rust::{VadIterator, load_silero_vad};
-use silero_vad_rust::silero_vad::utils_vad::VadIteratorParams;
-#[cfg(unix)]
+mod tools;
+mod audio_listener;
 
 use tokio::sync::broadcast;
+#[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
-use std::sync::Arc;
-use serde_json::Value;
-use crate::enums::SensorMessage;
 
+use std::sync::Arc;
+use serde_json::json;
+use crate::{llm::LLMHandler, sensors::SensorMessage};
+use crate::audio_listener::Listener;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
+    let is_speaking = Arc::new(AtomicBool::new(false));
+    let listener_speaking_flag = Arc::clone(&is_speaking);
+    let tts_speaking_flag = Arc::clone(&is_speaking);
+    let llm_speaking_flag = Arc::clone(&is_speaking);
+
     let (sensor_tx, mut db_rx) = broadcast::channel::<SensorMessage>(32);
     
     match db::create_dbs() {
@@ -38,61 +42,81 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tokio::spawn(async move {
         while let Ok(msg) = db_rx.recv().await {
-            db::store_data(msg).await;
+            let _ = db::store_data(msg).await;
         }
     });
 
 
     let (record_tx, mut record_rx) = tokio::sync::mpsc::channel::<Arc<[i16]>>(100);
-    let _record_stream = audio_speaker::record(record_tx).await;
+    let _record_stream = audio_service::record("TAM8", record_tx).await;
 
     let (transcribe_tx, mut transcribe_rx) = tokio::sync::mpsc::channel::<String>(100);
-    
-    tokio::spawn(async move {
-        let wake_word = "hey jarvis";
-        let mut oww_model = oww_rs::oww::OwwModel::from_file("/home/compiledtheory/stark-daemon/stark-daemon/hey_jarvis_v0.1.onnx", wake_word.to_string(), 0.5)
-            .expect("Failed to load wakeword model");
-        let vad_model = load_silero_vad().expect("Failed to load model.");
-        let params = VadIteratorParams {threshold: 0.2, min_silence_duration_ms: 500, ..Default::default()};
-        let mut speach_buffer = Vec::<i16>::new();
-        let mut oww_buffer = Vec::<f32>::new();
-        let mut is_recording = false;
-        let mut vad_iterator = VadIterator::new(vad_model, params).expect("Failed to create iterator");
-        while let Some(pcm_chunk) = record_rx.recv().await {
-            audio_listener::listen(
-                &mut oww_model, 
-                &mut vad_iterator, &pcm_chunk,
-                &mut speach_buffer, 
-                &mut oww_buffer,
-                &mut is_recording,
-                transcribe_tx.clone()).await;
-        }
+    let stt_handler = Arc::new(stt::STTHandler::new());
+    let rt_handle = tokio::runtime::Handle::current();
+
+    std::thread::spawn(move || {
+
+        let mut listener = Listener::new(
+            "/home/compiledtheory/daemon/stark.onnx",
+            "hey jarvis",
+            0.5
+        );
+
+        while let Some(pcm_chunk) = record_rx.blocking_recv() {
+            if listener_speaking_flag.load(Ordering::SeqCst) {
+                listener.clear_buffers();
+                listener.stop_recording();
+                continue; // Skip processing this audio chunk
+            }
+            
+            listener.manage_silence(audio_service::check_silence(&pcm_chunk));
+            
+            if listener.should_listen() {
+
+                if let Some(audio) = audio_service::listen(&mut listener, &pcm_chunk) {
+                    let stt = Arc::clone(&stt_handler);
+                    let tx = transcribe_tx.clone();
+
+                    rt_handle.spawn(async move {
+                    match stt.speech_to_text(&audio).await {
+                            Ok(text) => {
+                                println!("User: {}", text);
+                                let _ = tx.send(text).await;
+                            }
+                            Err(err) => eprintln!("STT Error: {}", err),
+                        }
+                    });
+                };
+            } else { listener.clear_buffers(); }
+            }
     });
 
-    let (speak_tx, mut speak_rx) = tokio::sync::mpsc::channel::<String>(100);
+    let (speak_tx, speak_rx) = tokio::sync::mpsc::channel::<String>(100);
     tokio::spawn(async move {
-        let mut conv: Vec<Value> = conversation::new_conversation();
+        let mut llm_handler = LLMHandler::new();
+        
         loop {
-            match tokio::time::timeout(tokio::time::Duration::from_secs(30), transcribe_rx.recv()).await {
+            match tokio::time::timeout(tokio::time::Duration::from_secs(60), transcribe_rx.recv()).await {
                 Ok(Some(msg)) => {
-                    if msg.is_empty() {continue};
-                    conversation::add_message(&msg, "user", &mut conv);
-                    llm::handle_ask_llm(&mut conv, speak_tx.clone()).await;
+                    if msg.trim().is_empty() {continue};
+                    llm_speaking_flag.store(true, Ordering::SeqCst);
+                    
+                    llm_handler.add_message(json!({
+                        "role": "user",
+                        "content": &msg
+                    }));
+
+                    llm::run_llm_turn(&mut llm_handler, speak_tx.clone()).await;
+                    
+                    while transcribe_rx.try_recv().is_ok() {}
                 },
                 Ok(None) => break, 
-                Err(_) => {conversation::reset(&mut conv)},
+                Err(_) => {llm_handler.wipe_memory();},
             }
         }
     });
 
-    tokio::spawn(async move {
-        while let Some(msg) = speak_rx.recv().await {
-            match tts::speak(msg).await {
-                Ok(_) => {},
-                Err(err) => eprintln!("{}", err)
-            }
-        }
-    });
+    tts::tts_worker(speak_rx, tts_speaking_flag);
 
     println!("S.T.A.R.K. daemon is running. Press Ctrl+C to exit.");
     shutdown_signal().await;

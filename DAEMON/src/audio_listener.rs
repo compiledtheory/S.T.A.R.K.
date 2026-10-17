@@ -1,65 +1,118 @@
-use silero_vad_rust::{VadIterator, silero_vad::utils_vad::VadEvent};
+use oww_rs::oww::OwwModel;
+use silero_vad_rust::{VadIterator, load_silero_vad, silero_vad::utils_vad::{VadEvent, VadIteratorParams}};
 
-use crate::stt;
-
-pub async fn listen(
-    oww_model: &mut oww_rs::oww::OwwModel,
-    vad_iterator: &mut VadIterator,     
-    chunk: &[i16],
-    speach_buffer: &mut Vec<i16>,
-    oww_buffer: &mut Vec<f32>,
-    is_recording: &mut bool,
-    tx: tokio::sync::mpsc::Sender<String>,
-    ) {
-
-    match *is_recording {
-        false => {check_wake_word(oww_model, chunk, speach_buffer, oww_buffer, is_recording).await},
-        true => {manage_recording(vad_iterator, chunk, speach_buffer, is_recording, tx).await},
-    }
+pub struct Listener {
+    pub speach_buffer: Vec<i16>,
+    pub oww_buffer: Vec<f32>,
+    pub is_recording: bool,
+    pub vad_iterator: VadIterator,
+    pub silence_frames: u32,
+    pub oww_model: OwwModel,
 }
 
-async fn check_wake_word(oww_model: &mut oww_rs::oww::OwwModel, chunk: &[i16], speach_buffer: &mut Vec<i16>, oww_buffer: &mut Vec<f32>, is_recording: &mut bool) {
-    speach_buffer.extend(chunk);
-    if speach_buffer.len() > 32000 {speach_buffer.drain(0..speach_buffer.len() - 32000);}
-    
-    let chunkf32: Vec<f32> = chunk.iter().map(|&s| s as f32).collect();
-    oww_buffer.extend(chunkf32);
+impl Listener {
+    pub fn new(path: &str, wake_word: &str, threshold: f32) -> Self {
+        let params = VadIteratorParams { 
+            threshold: 0.2, 
+            min_silence_duration_ms: 500, 
+            ..Default::default()};
 
-    while oww_buffer.len() >= 1280 {
-        let current_chunk: Vec<f32> = oww_buffer.drain(0..1280).collect();
-        let result = oww_model.detection(current_chunk);
-        if result.detected {
-            *is_recording = true;
-            speach_buffer.extend(chunk);
-            oww_buffer.clear();
-            let silence = vec![0.0; 1280];
-            for _ in 0..20 {
-                let _ = oww_model.detection(silence.clone());
-            }
-            break;
+        let vad_model = load_silero_vad().expect("Failed to load model.");
+        let vad_iterator = VadIterator::new(vad_model, params).expect(
+                "Failed to create iterator"
+            );
+
+        let oww_model = OwwModel::from_file(path, wake_word.to_string(), threshold).expect(
+                "Failed to load wakeword model"
+            );
+
+        return Self {
+            speach_buffer: Vec::<i16>::new(),
+            oww_buffer: Vec::<f32>::new(),
+            is_recording: false,
+            vad_iterator,
+            silence_frames: 15,
+            oww_model,
         }
     }
-}
 
-async fn manage_recording(vad_iterator: &mut VadIterator, chunk: &[i16], speach_buffer: &mut Vec<i16>, is_recording: &mut bool, tx: tokio::sync::mpsc::Sender<String> ) {
-    let chunkf32: Vec<f32> = chunk.iter().map(|&s| s as f32 / 32768.0).collect();
-    match vad_iterator.process_chunk(&chunkf32, true, 1) {
-        Ok(Some(VadEvent::Start(_ts))) => {speach_buffer.extend(chunk);},
-        Ok(Some(VadEvent::End(_ts))) => {
-            *is_recording = false;
-            let audio = std::mem::take(speach_buffer);
-            if audio.len() > 16000 {tokio::spawn(async move {send_recorded_speach(&audio, tx).await});}
-        },
-        Ok(None) => {if *is_recording {speach_buffer.extend(chunk);}},
-        Err(err) => eprintln!("VAD Error: {}", err)
+    pub fn clear_buffers(&mut self) {
+        self.speach_buffer.clear();
+        self.oww_buffer.clear();
     }
-}
 
-async fn send_recorded_speach(audio: &Vec<i16>, tx: tokio::sync::mpsc::Sender<String>) {
-    match stt::speach_to_text(audio).await {
-        Ok(text) => {
-            println!("User: {}", text);
-            let _ = tx.send(text).await;},
-        Err(err) => eprintln!("Something went wrong!: {}", err)
+    pub fn manage_silence(&mut self, rms: f32) {
+        if rms > 150.0 { self.reset_silence();} else {self.increment_silence();}
     }
+
+    pub fn reset_silence(&mut self) { self.silence_frames = 0; }
+
+    pub fn increment_silence(&mut self) { self.silence_frames += 1; }
+
+    pub fn should_listen(&self) -> bool { return self.is_recording || self.silence_frames < 15 }
+
+    pub fn start_recording(&mut self) { self.is_recording = true; }
+
+    pub fn stop_recording(&mut self) { self.is_recording = false; }
+
+    pub fn process_idle_chunk(&mut self, chunk: &[i16]) {
+        self.buffer_audio(chunk);
+        while self.oww_buffer.len() >= 1280 {
+            self.detect_wake_word(chunk);
+        }
+    }
+
+    fn buffer_audio(&mut self, chunk: &[i16]) { 
+        self.speach_buffer.extend(chunk); 
+        let buffer_len = self.speach_buffer.len();
+        if buffer_len > 32000 {
+            self.speach_buffer.drain(0..buffer_len - 32000); 
+        }
+
+        self.oww_buffer.extend(chunk.iter().map(|&s| s as f32));
+    }
+
+    fn detect_wake_word(&mut self, chunk: &[i16]) {
+       let current_chunk: Vec<f32> = self.oww_buffer.drain(0..1280).collect();
+       let result = self.oww_model.detection(current_chunk);
+       if result.detected {
+            self.start_recording();
+            self.speach_buffer.extend(chunk);
+            self.oww_buffer.clear();
+            for _ in 0..20 {
+                let _ = self.oww_model.detection(vec![0.0; 1280]);
+            }
+            return;
+       }
+    }
+
+    pub fn process_vad_chunk(&mut self, chunk: &[i16]) -> Option<Vec<i16>> {
+
+            let chunkf32: Vec<f32> = chunk.iter().map(|&s| s as f32 / 32768.0).collect();
+            match self.vad_iterator.process_chunk(&chunkf32, true, 1) {
+                Ok(Some(VadEvent::Start(_ts))) => { 
+                    self.speach_buffer.extend(chunk); 
+                    return None;
+                },
+                Ok(Some(VadEvent::End(_ts))) => {
+                    self.stop_recording();
+                    let audio = std::mem::take(&mut self.speach_buffer);
+                    
+                    if audio.len() > 16000 {
+                        return Some(audio);
+                    } else {
+                        return None;
+                    }
+                },
+                Ok(None) => { if self.is_recording { 
+                    self.speach_buffer.extend(chunk); 
+                    }
+                    return None;
+                },
+                Err(err) => {
+                    eprintln!("VAD Error: {}", err);
+                    return None;
+                }
+            }
+        }
 }

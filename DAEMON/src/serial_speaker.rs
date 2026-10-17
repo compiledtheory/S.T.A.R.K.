@@ -1,5 +1,5 @@
 use serial2_tokio::SerialPort;
-use crate::enums::SensorMessage;
+use crate::sensors::SensorMessage;
 use tokio::{io::{AsyncBufReadExt, BufReader}, sync::broadcast};
 
 fn handle_read(json: &str, tx: &broadcast::Sender<SensorMessage>) {
@@ -11,7 +11,7 @@ fn handle_read(json: &str, tx: &broadcast::Sender<SensorMessage>) {
     }
 }
 
-pub async fn speak(port: &str, tx: broadcast::Sender<SensorMessage>) {
+pub async fn read(port: &str, tx: broadcast::Sender<SensorMessage>) {
     let baud_rate = 115200;
     let serial_port = match SerialPort::open(port, baud_rate) {
         Ok(port) => port,
@@ -21,7 +21,7 @@ pub async fn speak(port: &str, tx: broadcast::Sender<SensorMessage>) {
         }
     };
 
-    let mut reader = BufReader::new(serial_port);
+    let mut reader = BufReader::new(serial_port); 
     let mut line = String::new();
 
     loop {

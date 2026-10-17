@@ -1,17 +1,31 @@
+use crate::audio_listener::Listener;
 use std::sync::Arc;
 
 use cpal::{Device, StreamConfig, traits::{DeviceTrait, HostTrait, StreamTrait}};
 use ringbuf::{HeapRb, traits::{Consumer, Producer, Split}};
 
-pub async fn record(tx: tokio::sync::mpsc::Sender<Arc<[i16]>>) -> cpal::Stream {
-    let host = cpal::default_host();
-    let device =  host.input_devices()
-        .expect("No input devices found on the system")
-        .find(|d| d.to_string().contains("TAM8"))
-        .unwrap_or_else(|| {
-            eprintln!("TAM8 not found, attempting to fallback to default...");
-            host.default_input_device().expect("No default input device either")
-        });
+pub fn check_silence(chunk: &[i16]) -> f32 {
+    let mut sum_squares = 0.0;
+    for &sample in chunk {
+        let s = sample as f32;
+        sum_squares += s * s;
+    }
+
+    return (sum_squares / chunk.len() as f32).sqrt();
+}
+
+pub fn listen(listener: &mut Listener, chunk: &[i16]) -> Option<Vec<i16>> {
+
+    if listener.is_recording {
+        listener.process_vad_chunk(chunk)
+    } else {
+        listener.process_idle_chunk(chunk);
+        None
+    }
+}
+
+pub async fn record(microphone: &str, tx: tokio::sync::mpsc::Sender<Arc<[i16]>>) -> cpal::Stream {
+    let device = find_input_device(microphone);
 
     println!("Using input device: {}", device);
 
@@ -24,14 +38,27 @@ pub async fn record(tx: tokio::sync::mpsc::Sender<Arc<[i16]>>) -> cpal::Stream {
     stream.play().expect("Failed to start microphone");
 
     tokio::spawn(async move {
-        emit_audio(consumer, tx).await;
+        forward_audio(consumer, tx).await;
     });
 
     return stream;
 }
 
+fn find_input_device(microphone: &str) -> Device {
+    let host = cpal::default_host();
+    let device =  host.input_devices()
+        .expect("No input devices found on the system")
+        .find(|d| d.to_string().contains(microphone))
+        .unwrap_or_else(|| {
+            eprintln!("{} not found, attempting to fallback to default...", microphone);
+            host.default_input_device().expect("No default input device either")
+        });
+
+    return device;
+}
+
 fn build_stream_config() -> cpal::StreamConfig {
-    return cpal::StreamConfig {
+    cpal::StreamConfig {
         channels: 1,
         sample_rate: 48_000,
         buffer_size: cpal::BufferSize::Default,
@@ -51,11 +78,16 @@ fn build_stream(
                 let _ = producer.try_push(sample);
             }
         }, 
-        move |err| eprintln!("Error occured while streaming: {}", err), 
+        move |err| {
+            let err_msg = err.to_string();
+            if !err_msg.contains("underrun") && !err_msg.contains("overrun") {
+                eprintln!("Error occured while streaming: {}", err_msg);
+            }
+        },
         None);
 }
 
-async fn emit_audio(
+async fn forward_audio(
     mut consumer: impl Consumer<Item = i16> + Send + 'static,
     tx: tokio::sync::mpsc::Sender<Arc<[i16]>>
 ) {
