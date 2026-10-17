@@ -4,7 +4,7 @@
 #include <esp_wifi.h>
 
 #define AIR 3800
-#define WATER 1400
+#define SOIL 2400
 #define SOIL_PIN 4
 #define ENERGY_PIN 3
 #define SLEEP 3600
@@ -25,12 +25,14 @@ typedef struct struct_message {
 struct_message plantData;
 esp_now_peer_info_t peerInfo;
 
+volatile bool packetSent = false;
+
 void onDataSend(const uint8_t *mac_addr, esp_now_send_status_t status) {
-  return;
+  packetSent = true;
 }
 
 double calculate_percentage(int measurment) {
-  double percentage = (double)(AIR-measurment) / (AIR-WATER) * 100;
+  double percentage = (double)(AIR-measurment) / (AIR-SOIL) * 100;
   return constrain(percentage, 0.0, 100.0);
 }
 
@@ -53,7 +55,12 @@ void setup(){
   digitalWrite(LED_PIN, LOW);
 
   WiFi.mode(WIFI_MODE_STA);
+  WiFi.disconnect();
+  
+  esp_wifi_set_promiscuous(true);
   esp_wifi_set_channel(PEER_CHANNEL, WIFI_SECOND_CHAN_NONE);
+  esp_wifi_set_promiscuous(false);
+
   if (esp_now_init() != ESP_OK) return;
 
   esp_now_register_send_cb(onDataSend);
@@ -63,7 +70,9 @@ void setup(){
   peerInfo.encrypt = false;
 
   if (esp_now_add_peer(&peerInfo) != ESP_OK){
-    return;
+    delay(100);
+    esp_sleep_enable_timer_wakeup(SLEEP * 1000000ULL);
+    esp_deep_sleep_start();
   }
 
   digitalWrite(LED_PIN, HIGH);
@@ -76,13 +85,18 @@ void setup(){
   plantData.measurment = percentage;
   strcpy(plantData.type, "Plant");
 
+  delay(10); 
   esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *) &plantData, sizeof(plantData));
+
+  int timeout = 0;
+  while (!packetSent && timeout < 500) {
+    delay(1);
+    timeout++;
+  }
 
   digitalWrite(LED_PIN, LOW);
   Serial.flush();
-  Serial.end();
-  delay(100);
-
+  
   esp_sleep_enable_timer_wakeup(SLEEP * 1000000ULL);
   esp_deep_sleep_start();
 }
