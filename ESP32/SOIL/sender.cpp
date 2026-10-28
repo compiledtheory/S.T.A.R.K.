@@ -82,7 +82,7 @@ void setup(){
 
   digitalWrite(ENERGY_PIN, LOW);
 
-  plantData.packetType = 1;
+  plantData.packetType = PACKET_TYPE;
   plantData.ID = SENSOR_ID;
   strcpy(plantData.plant, PLANT_NAME);
   plantData.measurment = percentage;

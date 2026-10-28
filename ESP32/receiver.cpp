@@ -51,7 +51,9 @@ void onDataReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
   if (handlers[type] != nullptr) {
     String payload = handlers[type](incomingData, len);
     if (payload != "") {
-      Serial.print(payload);
+      Serial.println(payload);
+      digitalWrite(LED_PIN, LOW);
+      newDataReceived = true;
     }
   } 
 }
