@@ -6,31 +6,62 @@
 
 #define LED_PIN 8
 
-typedef struct struct_message {
+typedef struct {
+  uint8_t packetType;
   int ID;
   char plant[32];
   float measurment;
-  char type[16];
-} struct_message;
+} PlantPacket;
 
-struct_message plantData;
+typedef struct {
+  uint8_t packetType;
+  int ID;
+  char location[32];
+} MotionPacket;
+
+typedef String (*PacketHandler)(const uint8_t *data, int len);
+
+PacketHandler handlers[256];
+
+String handlePlant(const uint8_t *data, int len) {
+  if (len != sizeof(PlantPacket)) {return "";}
+  PlantPacket plant;
+  memcpy(&plant, data, sizeof(PlantPacket));
+  return "{\"type\":\"Plant\",\"sensor\":" + String(plant.ID) + 
+         ",\"plant\":\"" + String(plant.plant) + 
+         "\",\"moisture\":" + String(plant.measurment) + "}";
+}
+
+String handleMotion(const uint8_t *data, int len) {
+  if (len != sizeof(MotionPacket)) {return "";}
+  MotionPacket motion;
+  memcpy(&motion, data, sizeof(MotionPacket));
+  return "{\"type\":\"Motion\",\"sensor\":" + String(motion.ID) + 
+         ",\"location\":\"" + String(motion.location) + "}";
+}
+
 volatile bool newDataReceived = false;
 unsigned long ledTurnedOnAt = 0;
 bool ledIsOn = false;
 
-String makePayload(char *type, int ID, char *plant, double moisture) {
-  return "{\"type\":\"" + String(type) + "\",\"sensor\":" + String(ID) + ",\"plant\":\"" + String(plant) + "\",\"moisture\":" + String(moisture) + "}";
-}
-
 void onDataReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
-  digitalWrite(LED_PIN, LOW); 
-  memcpy(&plantData, incomingData, sizeof(plantData));
-  newDataReceived = true;
+  if (len == 0) return;
+  uint8_t type = incomingData[0];
+
+  if (handlers[type] != nullptr) {
+    String payload = handlers[type](incomingData, len);
+    if (payload != "") {
+      Serial.print(payload);
+    }
+  } 
 }
 
 void setup() {
   Serial.begin(115200);
-  delay(3000); 
+  delay(2000); 
+
+  handlers[1] = handlePlant;
+  handlers[2] = handleMotion;
   
   pinMode(LED_PIN, OUTPUT);
   for(int i=0; i<3; i++) {
@@ -70,6 +101,4 @@ void loop() {
   
   ledTurnedOnAt = millis();
   ledIsOn = true;
-  
-  Serial.println(makePayload(plantData.type, plantData.ID, plantData.plant, plantData.measurment));
 }

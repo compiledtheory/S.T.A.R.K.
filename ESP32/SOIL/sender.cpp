@@ -12,17 +12,19 @@
 #define PEER_CHANNEL 11
 #define SENSOR_ID 1
 #define PLANT_NAME "FICUS"
+#define PACKET_TYPE 1
 
 uint8_t broadcastAddress[] = {0x9C, 0x9E, 0x6E, 0xE2, 0xDE, 0x1C};
 
-typedef struct struct_message {
+typedef struct {
+  uint8_t packetType;
   int ID;
   char plant[32];
   float measurment;
-  char type[16];
-} struct_message;
+} PlantPacket;
 
-struct_message plantData;
+PlantPacket plantData;
+
 esp_now_peer_info_t peerInfo;
 
 volatile bool packetSent = false;
@@ -80,12 +82,12 @@ void setup(){
 
   digitalWrite(ENERGY_PIN, LOW);
 
+  plantData.packetType = 1;
   plantData.ID = SENSOR_ID;
   strcpy(plantData.plant, PLANT_NAME);
   plantData.measurment = percentage;
-  strcpy(plantData.type, "Plant");
 
-  delay(10); 
+  delay(100); 
   esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *) &plantData, sizeof(plantData));
 
   int timeout = 0;
