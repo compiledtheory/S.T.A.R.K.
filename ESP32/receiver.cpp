@@ -17,14 +17,24 @@ typedef struct {
   uint8_t packetType;
   int ID;
   char location[32];
-} MotionPacket;
+} PirMotionPacket;
+
+typedef struct {
+  uint8_t packetType;
+  int ID;
+  int16_t x;
+  int16_t y;
+  int16_t speed;
+  uint16_t resolution;
+  float distance;
+} LD240MotionPacket;
 
 typedef String (*PacketHandler)(const uint8_t *data, int len);
 
 PacketHandler handlers[256];
 
 String handlePlant(const uint8_t *data, int len) {
-  if (len != sizeof(PlantPacket)) {return "";}
+  if (len != sizeof(PlantPacket)) return "";
   PlantPacket plant;
   memcpy(&plant, data, sizeof(PlantPacket));
   return "{\"type\":\"Plant\",\"sensor\":" + String(plant.ID) + 
@@ -32,12 +42,21 @@ String handlePlant(const uint8_t *data, int len) {
          "\",\"moisture\":" + String(plant.measurment) + "}";
 }
 
-String handleMotion(const uint8_t *data, int len) {
-  if (len != sizeof(MotionPacket)) {return "";}
-  MotionPacket motion;
-  memcpy(&motion, data, sizeof(MotionPacket));
-  return "{\"type\":\"Motion\",\"sensor\":" + String(motion.ID) + 
+String handlePirMotion(const uint8_t *data, int len) {
+  if (len != sizeof(PirMotionPacket)) return "";
+  PirMotionPacket motion;
+  memcpy(&motion, data, sizeof(PirMotionPacket));
+  return "{\"type\":\"PirMotion\",\"sensor\":" + String(motion.ID) + 
          ",\"location\":\"" + String(motion.location) + "}";
+}
+
+String handleLD240Motion(const uint8_t *data, int len) {
+  if (len != sizeof(LD240MotionPacket)) return "";
+  LD240MotionPacket motion;
+  memcpy(&motion, data, sizeof(LD240MotionPacket));
+  return "{\"type\":\"LD240Motion\",\"sensor\":" + String(motion.ID) + 
+         ",\"x\":\"" + String(motion.x) + ",\"y\":\"" + String(motion.y) + 
+         ",\"speed\":\"" + String(motion.speed) + "}";
 }
 
 volatile bool newDataReceived = false;
@@ -63,7 +82,8 @@ void setup() {
   delay(2000); 
 
   handlers[1] = handlePlant;
-  handlers[2] = handleMotion;
+  handlers[2] = handlePirMotion;
+  handlers[3] = handleLD240Motion;
   
   pinMode(LED_PIN, OUTPUT);
   for(int i=0; i<3; i++) {
