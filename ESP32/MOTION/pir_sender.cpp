@@ -18,13 +18,29 @@ typedef struct {
 } MotionPacket;
 
 MotionPacket motionData;
-
 esp_now_peer_info_t peerInfo;
 volatile bool packetSent = false;
-bool motionHandled = false;
+
+esp_now_send_status_t lastStatus = ESP_NOW_SEND_FAIL;
 
 void onDataSend(const uint8_t *mac_addr, esp_now_send_status_t status) {
-  packetSent = true;
+  lastStatus = status; packetSent = true;
+}
+
+bool sendWithRetry(const MotionPacket &p, int attempts = 4) {
+  for (int i = 0; i < attempts; i++) {
+    packetSent = false;
+    esp_err_t err = esp_now_send(broadcastAddress, (uint8_t *) &p, sizeof(p));
+    if (err == ESP_OK) {
+      uint32_t start = millis();
+      while (!packetSent && millis() - start < 50) delay(1);
+      if (
+        packetSent && lastStatus == ESP_NOW_SEND_SUCCESS) return true;
+    }
+    Serial.printf("send attempt %d failed err=%d, status=%d, done=%d\n", i+1, err, lastStatus, packetSent);
+    delay(10);
+  }
+  return false;
 }
 
 void setup() {
@@ -36,6 +52,7 @@ void setup() {
   delay(100);
 
   WiFi.mode(WIFI_MODE_STA);
+  WiFi.setTxPower(WIFI_POWER_7dBm);
   WiFi.disconnect();
 
   esp_wifi_set_promiscuous(true);
@@ -56,25 +73,22 @@ void setup() {
   motionData.packetType = PACKET_TYPE;
   motionData.ID = 1;
   strcpy(motionData.location, ROOM);
-  esp_err_t result = esp_now_send(broadcastAddress, (uint8_t*) &motionData, sizeof(motionData));
 }
 
 void loop() {
-  int motion = digitalRead(PIR_PIN);
-
-  if (motion == HIGH && !motionHandled) {
+  if (digitalRead(PIR_PIN) == HIGH) {
     Serial.println("Motion!");
     
     packetSent = false;
-    esp_err_t result = esp_now_send(broadcastAddress, (uint8_t*) &motionData, sizeof(motionData));
+    digitalWrite(LED_PIN, LOW);
+    delay(200);
+    bool ok = sendWithRetry(motionData);
+    digitalWrite(LED_PIN, HIGH);
     
     int timeout = 0;
     while (!packetSent && timeout < 500) {
       delay(1);
       timeout++;
     }
-    motionHandled = true;
   }
-
-  if (motion == LOW && motionHandled) { motionHandled = false; }
 }
