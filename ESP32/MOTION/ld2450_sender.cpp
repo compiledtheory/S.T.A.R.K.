@@ -39,7 +39,7 @@ struct Target {
 // low + high * 256 - 2^15
 int16_t decodeValue(uint8_t lowByte, uint8_t highByte) {
   uint16_t raw = lowByte | (highByte << 8);
-  return (raw & 0x8000) ? (raw & 0x7FFF) : -(int16_t)raw;
+  return (raw & 0x8000) ? (raw & 0x7FFF) : -(uint16_t)raw;
 }
 
 void onDataSend(const uint8_t* mac_addr, esp_now_send_status_t status) {
@@ -58,6 +58,8 @@ Target makeTarget(uint8_t* payload) {
 }
 
 
+esp_now_peer_info_t peerInfo;
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
@@ -74,6 +76,12 @@ void setup() {
 
   if (esp_now_init()!= ESP_OK) return;
   esp_now_register_send_cb(onDataSend);
+
+  memcpy(peerInfo.peer_addr, broadcastAddress, 6);
+  peerInfo.channel = PEER_CHANNEL;
+  peerInfo.encrypt = false;
+
+  if (esp_now_add_peer(&peerInfo) != ESP_OK) return;
 
   Serial.println("Initializing...");
   Radar.begin(256000, SERIAL_8N1, RADAR_RX_PIN, RADAR_TX_PIN);
@@ -113,6 +121,8 @@ void loop() {
       if (target.distance > 6000 || target.distance < 500) continue;
 
       targets.push_back(target);
+
+      Serial.printf("distance: %4.0f", target.distance);
 
       // not really needed currently
       // target.angle = atan2((float)target.x, (float)targets.y) * 180.0 / PI;

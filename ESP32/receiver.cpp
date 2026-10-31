@@ -3,6 +3,7 @@
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include <HTTPClient.h>
+#include <vector>
 
 #define LED_PIN 8
 
@@ -25,7 +26,6 @@ typedef struct {
   int16_t x;
   int16_t y;
   int16_t speed;
-  uint16_t resolution;
   float distance;
 } LD2450MotionPacket;
 
@@ -51,12 +51,19 @@ String handlePirMotion(const uint8_t *data, int len) {
 }
 
 String handleLD2450Motion(const uint8_t *data, int len) {
-  if (len != sizeof(LD2450MotionPacket)) return "";
-  LD2450MotionPacket motion;
-  memcpy(&motion, data, sizeof(LD2450MotionPacket));
-  return "{\"type\":\"LD240Motion\",\"sensor\":" + String(motion.ID) + 
-         ",\"x\":\"" + String(motion.x) + ",\"y\":\"" + String(motion.y) + 
-         ",\"speed\":\"" + String(motion.speed) + "}";
+  int receivedCount = len / sizeof(LD2450MotionPacket);
+  std::vector<LD2450MotionPacket> receivedMotion(receivedCount);
+
+  if (receivedCount > 0) {
+    memcpy(receivedMotion.data(), data, len);
+  }
+
+  Serial.printf("received targets: %d\n", receivedMotion.size());
+  for (int i = 0; i < receivedMotion.size(); i++) {
+    Serial.printf("Target: %d; distance: %4.0f\n", i+1, receivedMotion[i].distance);
+  }
+  
+  return "success";
 }
 
 volatile bool newDataReceived = false;
