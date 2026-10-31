@@ -27,14 +27,14 @@ typedef struct {
   int16_t speed;
   uint16_t resolution;
   float distance;
-} LD240MotionPacket;
+} LD2450MotionPacket;
 
 typedef String (*PacketHandler)(const uint8_t *data, int len);
 
 PacketHandler handlers[256];
 
 String handlePlant(const uint8_t *data, int len) {
-  if (len != sizeof(PlantPacket)) return "";
+  if (len != sizeof(PlantPacket)) {return "";}
   PlantPacket plant;
   memcpy(&plant, data, sizeof(PlantPacket));
   return "{\"type\":\"Plant\",\"sensor\":" + String(plant.ID) + 
@@ -43,17 +43,17 @@ String handlePlant(const uint8_t *data, int len) {
 }
 
 String handlePirMotion(const uint8_t *data, int len) {
-  if (len != sizeof(PirMotionPacket)) return "";
+  if (len != sizeof(PirMotionPacket)) {return "";}
   PirMotionPacket motion;
   memcpy(&motion, data, sizeof(PirMotionPacket));
   return "{\"type\":\"PirMotion\",\"sensor\":" + String(motion.ID) + 
          ",\"location\":\"" + String(motion.location) + "}";
 }
 
-String handleLD240Motion(const uint8_t *data, int len) {
-  if (len != sizeof(LD240MotionPacket)) return "";
-  LD240MotionPacket motion;
-  memcpy(&motion, data, sizeof(LD240MotionPacket));
+String handleLD2450Motion(const uint8_t *data, int len) {
+  if (len != sizeof(LD2450MotionPacket)) return "";
+  LD2450MotionPacket motion;
+  memcpy(&motion, data, sizeof(LD2450MotionPacket));
   return "{\"type\":\"LD240Motion\",\"sensor\":" + String(motion.ID) + 
          ",\"x\":\"" + String(motion.x) + ",\"y\":\"" + String(motion.y) + 
          ",\"speed\":\"" + String(motion.speed) + "}";
@@ -83,7 +83,7 @@ void setup() {
 
   handlers[1] = handlePlant;
   handlers[2] = handlePirMotion;
-  handlers[3] = handleLD240Motion;
+  handlers[3] = handleLD2450Motion;
   
   pinMode(LED_PIN, OUTPUT);
   for(int i=0; i<3; i++) {
