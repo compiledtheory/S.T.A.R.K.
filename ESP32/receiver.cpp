@@ -14,21 +14,6 @@ typedef struct {
   float measurment;
 } PlantPacket;
 
-typedef struct {
-  uint8_t packetType;
-  int ID;
-  char location[32];
-} PirMotionPacket;
-
-typedef struct {
-  uint8_t packetType;
-  int ID;
-  int16_t x;
-  int16_t y;
-  int16_t speed;
-  float distance;
-} LD2450MotionPacket;
-
 typedef String (*PacketHandler)(const uint8_t *data, int len);
 
 PacketHandler handlers[256];
@@ -43,27 +28,11 @@ String handlePlant(const uint8_t *data, int len) {
 }
 
 String handlePirMotion(const uint8_t *data, int len) {
-  if (len != sizeof(PirMotionPacket)) {return "";}
-  PirMotionPacket motion;
-  memcpy(&motion, data, sizeof(PirMotionPacket));
-  return "{\"type\":\"PirMotion\",\"sensor\":" + String(motion.ID) + 
-         ",\"location\":\"" + String(motion.location) + "}";
+  return data[0] == 2 ? "{\"type\":\"PirMotion\",\"sensor\":" + String(data[1]) + "}" : "";
 }
 
-String handleLD2450Motion(const uint8_t *data, int len) {
-  int receivedCount = len / sizeof(LD2450MotionPacket);
-  std::vector<LD2450MotionPacket> receivedMotion(receivedCount);
-
-  if (receivedCount > 0) {
-    memcpy(receivedMotion.data(), data, len);
-  }
-
-  Serial.printf("received targets: %d\n", receivedMotion.size());
-  for (int i = 0; i < receivedMotion.size(); i++) {
-    Serial.printf("Target: %d; distance: %4.0f\n", i+1, receivedMotion[i].distance);
-  }
-  
-  return "success";
+String handleLD2450Motion(const uint8_t *data, int len) {  
+  return data[0] == 3 ? "{\"type\":\"LD2450Motion\",\"sensor\":" + String(data[1]) + ",\"targets\":" + String(data[2]) + "}" : "";
 }
 
 volatile bool newDataReceived = false;
