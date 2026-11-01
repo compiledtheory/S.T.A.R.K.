@@ -5,6 +5,7 @@
 #include <vector>
 
 #define PACKET_TYPE 3
+#define NODE_ID 4
 #define LED_PIN 8
 #define RADAR_RX_PIN 4
 #define RADAR_TX_PIN 3
@@ -33,7 +34,6 @@ struct Target {
   int16_t x;
   int16_t y;
   int16_t speed;
-  float distance;
 };
 
 // low + high * 256 - 2^15
@@ -46,17 +46,10 @@ void onDataSend(const uint8_t* mac_addr, esp_now_send_status_t status) {
   return;
 }
 
-Target makeTarget(uint8_t* payload) {
-  Target target;
-  target.PacketType = PACKET_TYPE;
-  target.ID = 1;
-  target.x = decodeValue(payload[X], payload[X + 1]);
-  target.y = decodeValue(payload[Y], payload[Y + 1]);
-  target.distance = sqrt((float) target.x*target.x + (float)target.y*target.y); // pitagorasik;
-  target.speed = decodeValue(payload[SPEED], payload[SPEED + 1]);
-  return target;
+static void putI16(uint8_t* payload, int16_t value) {
+  payload[0] = value & 0xFF;
+  payload[1] = (value >> 8) & 0xFF;
 }
-
 
 esp_now_peer_info_t peerInfo;
 
@@ -101,42 +94,47 @@ void loop() {
       continue;
     }
 
-    uint8_t payload[26];
-    payload[0] = byteIn;
-    size_t readCount = Radar.readBytes(&payload[1], 25);
+    uint8_t LD2450Payload[26];
+    LD2450Payload[0] = byteIn;
+    size_t readCount = Radar.readBytes(&LD2450Payload[1], 25);
 
-    if (!(readCount == 25 && payload[24] == 0x55 && payload[25] == 0xCC)) { 
+    if (!(readCount == 25 && LD2450Payload[24] == 0x55 && LD2450Payload[25] == 0xCC)) { 
       headerIndex = 0;
       continue; 
     }
 
-    std::vector<Target> targets;
+    uint8_t payloadOut[3 + 3 * 6]; // 3 bytes header, max 3 targets: 2 bytes x, 2 bytes y, 2 bytes speed
+    payloadOut[0] = PACKET_TYPE;
+    payloadOut[1] = NODE_ID;
+
+    uint8_t count = 0;
 
     for (int i = 0; i <3; i++) {
       int offset = i * 8;
 
-      Target target = makeTarget(&payload[offset]); // send data starting at offset memory address
+      uint8_t* target = &LD2450Payload[offset]; // starting at offset memory address
+      int16_t x = decodeValue(target[X], target[X+1]);
+      int16_t y = decodeValue(target[Y], target[Y+1]);
+      
+      if (x == 0 && y == 0) { continue; }
 
-      if (target.y == 0 && target.x == 0) continue;
-      if (target.distance > 6000 || target.distance < 500) continue;
+      float distance = sqrtf((float)x * x + (float)y*y);
+      if (distance < 500 || distance > 6000) { continue; }
 
-      targets.push_back(target);
-
-      Serial.printf("distance: %4.0f", target.distance);
-
-      // not really needed currently
-      // target.angle = atan2((float)target.x, (float)targets.y) * 180.0 / PI;
-      // target.resolution = payload[RESOLUTION] | (payload[RESOLUTION + 1] << 8); // unsigned
+      uint8_t *out = &payloadOut[3 + count * 6];
+      putI16(out, x);
+      putI16(out + Y, y);
+      putI16(out + SPEED, decodeValue(target[SPEED], target[SPEED+1]));
+      count++;
 
     }
 
-    headerIndex = 0;
-    if (targets.empty()) continue;
+    payloadOut[2] = count;
+    size_t len = 3 + count * 6;
+    
+    esp_now_send(broadcastAddress, payloadOut, len);
 
-    uint8_t *data = (uint8_t*)targets.data();
-    size_t dataSize = targets.size() * sizeof(Target);
-    esp_err_t result = esp_now_send(broadcastAddress, data, dataSize);
-    Serial.println(result == ESP_OK ? "success" : "fail");
+    headerIndex = 0;
   } 
 }
 
