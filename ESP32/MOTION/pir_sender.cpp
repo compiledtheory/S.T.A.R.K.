@@ -2,8 +2,11 @@
 #include <WiFi.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
+#include <esp_sleep.h>
+#include <driver/gpio.h>
 
 #define PIR_PIN 4
+#define PIR_PIN_GPIO GPIO_NUM_4
 #define LED_PIN 8
 #define NODE_ID 1
 #define PACKET_TYPE 2
@@ -14,11 +17,11 @@ uint8_t broadcastAddress[] = {0x9C, 0x9E, 0x6E, 0xE2, 0xDE, 0x1C};
 
 esp_now_peer_info_t peerInfo;
 volatile bool packetSent = false;
-
 esp_now_send_status_t lastStatus = ESP_NOW_SEND_FAIL;
 
 void onDataSend(const uint8_t *mac_addr, esp_now_send_status_t status) {
-  lastStatus = status; packetSent = true;
+  lastStatus = status;
+  packetSent = true;
 }
 
 bool sendWithRetry(const uint8_t* data, size_t len, int attempts = 4) {
@@ -28,8 +31,7 @@ bool sendWithRetry(const uint8_t* data, size_t len, int attempts = 4) {
     if (err == ESP_OK) {
       uint32_t start = millis();
       while (!packetSent && millis() - start < 50) delay(1);
-      if (
-        packetSent && lastStatus == ESP_NOW_SEND_SUCCESS) return true;
+      if (packetSent && lastStatus == ESP_NOW_SEND_SUCCESS) return true;
     }
     delay(10);
   }
@@ -38,25 +40,31 @@ bool sendWithRetry(const uint8_t* data, size_t len, int attempts = 4) {
 
 bool sendMotion() {
   uint8_t pkt[2] = {PACKET_TYPE, NODE_ID};
-  return sendWithRetry(pkt, sizeof(pkt));
+  bool success = sendWithRetry(pkt, sizeof(pkt));
+
+  digitalWrite(LED_PIN, LOW);
+  delay(100);
+  digitalWrite(LED_PIN, HIGH);
+
+  return success;
 }
 
 void startSleep() {
-  while (true) {
-    digitalWrite(LED_PIN, !digitalRead(PIR_PIN));
-    delay(50);
-  }
-  esp_deep_sleep_enable_gpio_wakeup(1ULL << PIR_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH);
+  while (digitalRead(PIR_PIN) == HIGH) delay(20);
+  esp_wifi_stop();
+  gpio_pullup_dis(PIR_PIN_GPIO);
+  gpio_pulldown_dis(PIR_PIN_GPIO); // this was the fix thx gemini i spend all day debugging WHY its not waking up
+  esp_deep_sleep_enable_gpio_wakeup(1ULL << PIR_PIN_GPIO, ESP_GPIO_WAKEUP_GPIO_HIGH);
+  gpio_hold_en(PIR_PIN_GPIO);
+  gpio_deep_sleep_hold_en();
   esp_deep_sleep_start();
 }
 
 void setup() {
-  Serial.begin(115200);
-  
+  gpio_hold_dis(PIR_PIN_GPIO);
   pinMode(PIR_PIN, INPUT);
   pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW);
-  delay(100);
+  digitalWrite(LED_PIN, HIGH);
 
   WiFi.mode(WIFI_MODE_STA);
   WiFi.setTxPower(WIFI_POWER_7dBm);
@@ -72,26 +80,19 @@ void setup() {
   memcpy(peerInfo.peer_addr, broadcastAddress, 6);
   peerInfo.channel = PEER_CHANNEL;
   peerInfo.encrypt = false;
-
   if (esp_now_add_peer(&peerInfo) != ESP_OK) startSleep();
 
-  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO) {
-    for (int i = 0; i < 2; i++) {
-        digitalWrite(LED_PIN, HIGH);
-        delay(300);
-        digitalWrite(LED_PIN, LOW);
-        delay(300);
+  uint32_t lastSend = millis();
+  sendMotion();
+
+  while (digitalRead(PIR_PIN) == HIGH) {
+    if (millis() - lastSend >= MOTION_INTERVAL_MS) {
+      lastSend = millis();
+      sendMotion();
     }
-    sendMotion();
-    uint32_t last = millis();
-    while (digitalRead(PIR_PIN) == HIGH) {
-      if (millis() - last >= MOTION_INTERVAL_MS) {
-        sendMotion();
-        last = millis();
-      }
-      delay(10);
-    }
+    delay(20);
   }
+
   startSleep();
 }
 
