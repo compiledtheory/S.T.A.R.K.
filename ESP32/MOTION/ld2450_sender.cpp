@@ -16,6 +16,9 @@ uint8_t headerBytes[] = {0xAA, 0xFF, 0x03, 0x00};
 uint8_t broadcastAddress[] = {0x9C, 0x9E, 0x6E, 0xE2, 0xDE, 0x1C};
 int headerIndex = 0;
 
+uint32_t lastPush = 0;
+bool hadTargets = false;
+
 // LD2450 sends: 
 // HEADER: AA FF 03 00 
 // TARGET: 0E 03 -X B1 86 -Y 10 00 -speed 40 01 -resolution
@@ -27,14 +30,6 @@ int headerIndex = 0;
 #define Y 2
 #define SPEED 4
 #define RESOLUTION 6
-
-struct Target {
-  uint8_t PacketType;
-  int ID;
-  int16_t x;
-  int16_t y;
-  int16_t speed;
-};
 
 // low + high * 256 - 2^15
 int16_t decodeValue(uint8_t lowByte, uint8_t highByte) {
@@ -132,8 +127,15 @@ void loop() {
     payloadOut[2] = count;
     size_t len = 3 + count * 6;
     
-    esp_now_send(broadcastAddress, payloadOut, len);
+    // if count > 0 and 500 millis since last push -> send. If not send empty heartbeat every 5s;
+    bool shouldSend = count ? (millis() - lastPush >= 500) : (hadTargets || millis() - lastPush >= 5000);
 
+    if (shouldSend) {
+      esp_now_send(broadcastAddress, payloadOut, len);
+      lastPush = millis();
+    }
+
+    hadTargets = count > 0;
     headerIndex = 0;
   } 
 }
