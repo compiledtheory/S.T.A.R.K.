@@ -10,41 +10,55 @@
 #define SLEEP 3600
 #define LED_PIN 8
 #define PEER_CHANNEL 11
-#define SENSOR_ID 1
-#define PLANT_NAME "FICUS"
 #define PACKET_TYPE 1
+#define NODE_ID 4
 
-uint8_t broadcastAddress[] = {0x9C, 0x9E, 0x6E, 0xE2, 0xDE, 0x1C};
+uint8_t broadcastAddress[] = {0x80, 0x53, 0xE0, 0xB4, 0xE1, 0x28};
 
-typedef struct {
-  uint8_t packetType;
-  int ID;
-  char plant[32];
-  float measurment;
-} PlantPacket;
-
-PlantPacket plantData;
 
 esp_now_peer_info_t peerInfo;
-
 volatile bool packetSent = false;
+esp_now_send_status_t lastStatus = ESP_NOW_SEND_FAIL;
 
 void onDataSend(const uint8_t *mac_addr, esp_now_send_status_t status) {
+  lastStatus = status;
   packetSent = true;
 }
 
-double calculate_percentage(int measurment) {
-  double percentage = (double)(AIR-measurment) / (AIR-SOIL) * 100;
-  return constrain(percentage, 0.0, 100.0);
+int calculate_percentage(int measurement) {
+  int percentage = (AIR - measurement) * 100 / (AIR - SOIL);
+  return constrain(percentage, 0, 100);
 }
 
 int getAverageMeasurment(int samples) {
   int total = 0;
   for (int i = 0; i < samples; i++) {
+    Serial.println(analogRead(SOIL_PIN));
     total += analogRead(SOIL_PIN);
     delay(10);
   }
   return total / samples;
+}
+
+void sendWithRetry(const uint8_t* data, size_t len, int attempts = 4) {
+  for (int i = 0; i < attempts; i++) {
+    packetSent = false;
+    esp_err_t err = esp_now_send(broadcastAddress, data, len);
+    if (err == ESP_OK) {
+      uint32_t start = millis();
+      while (!packetSent && millis() - start < 50) delay(1);
+      if (packetSent && lastStatus == ESP_NOW_SEND_SUCCESS) return;
+    }
+    delay(10);
+  }
+}
+
+void sendMoisture(int moisture) {
+  uint8_t pkt[3] = {PACKET_TYPE, NODE_ID, moisture};
+  sendWithRetry(pkt, sizeof(pkt));
+  digitalWrite(LED_PIN, LOW);
+  delay(100);
+  digitalWrite(LED_PIN, HIGH);
 }
 
 void setup(){
@@ -78,23 +92,12 @@ void setup(){
   }
 
   digitalWrite(LED_PIN, HIGH);
-  double percentage = calculate_percentage(getAverageMeasurment(10));
+  int moisture = calculate_percentage(getAverageMeasurment(10));
 
   digitalWrite(ENERGY_PIN, LOW);
 
-  plantData.packetType = PACKET_TYPE;
-  plantData.ID = SENSOR_ID;
-  strcpy(plantData.plant, PLANT_NAME);
-  plantData.measurment = percentage;
-
   delay(100); 
-  esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *) &plantData, sizeof(plantData));
-
-  int timeout = 0;
-  while (!packetSent && timeout < 500) {
-    delay(1);
-    timeout++;
-  }
+  sendMoisture(moisture);
 
   digitalWrite(LED_PIN, LOW);
   Serial.flush();
