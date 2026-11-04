@@ -1,9 +1,18 @@
 use rusqlite::{Connection, params};
-use tokio::task::JoinError;
-use crate::sensors::{PlantData, SensorMessage};
+use tokio::{sync::broadcast, task::JoinError};
+use crate::sensors::{PlantData, SensorEvent};
 use std::collections::HashMap;
 use crate::tools::WateringEventOneArgs;
 
+
+pub async fn save_plant(data: PlantData) -> Result<(), String> {
+    println!("plant: {} moisture: {}", data.plant, data.moisture);
+    handle_write(tokio::task::spawn_blocking(move || add_plant(&data)).await)
+}
+
+pub async fn save_watering_event(data: WateringEventOneArgs) -> Result<(), String> {
+    handle_write(tokio::task::spawn_blocking(move || add_watering_event(&data)).await)
+}
 
 fn add_plant(data: &PlantData) -> rusqlite::Result<()> {
     let conn = open_connection();
@@ -23,6 +32,18 @@ fn add_watering_event(data: &WateringEventOneArgs) -> rusqlite::Result<()> {
     Ok(())
 }
 
+pub async fn db_consumer(mut rx: broadcast::Receiver<SensorEvent>) {
+    loop {
+        match rx.recv().await {
+            Ok(SensorEvent::Plant(p)) => {
+                if let Err(e) = save_plant(p).await { eprint!("{e}"); }
+            },
+            Ok(_) => {},
+            Err(err) => { eprintln!("db error: {err}"); } 
+        }
+    }
+}
+
 fn handle_write(result: Result<rusqlite::Result<()>, JoinError>) -> Result<(), String>{
     match result {
         Ok(Ok(())) => {Ok(())},
@@ -34,13 +55,6 @@ fn handle_write(result: Result<rusqlite::Result<()>, JoinError>) -> Result<(), S
             let msg = format!("Database thread panicked: {}", err);
             Err(msg)
         }
-    }
-}
-
-pub async fn store_data(msg: SensorMessage) -> Result<(), String>{
-    match msg {
-        SensorMessage::Plant(msg) => handle_write(tokio::task::spawn_blocking(move || add_plant(&msg)).await),
-        SensorMessage::Watering(msg) => handle_write(tokio::task::spawn_blocking(move || add_watering_event(&msg)).await)  
     }
 }
 

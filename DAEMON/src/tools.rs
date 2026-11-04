@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use crate::{db, sensors::SensorMessage};
+use crate::db;
 use schemars::{schema_for, JsonSchema};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -110,8 +110,7 @@ async fn post_watering_event_for_plant(args: serde_json::Value) -> String {
         plant: plant_name,
     };
 
-    let payload = SensorMessage::Watering(watering_args);
-    let result = db::store_data(payload).await;
+    let result = db::save_watering_event(watering_args).await;
     match result {
         Ok(_) => {
             return format!("{{\"status\": {}}}", "success") 

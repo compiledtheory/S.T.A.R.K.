@@ -1,6 +1,8 @@
 use oww_rs::oww::OwwModel;
 use silero_vad_rust::{VadIterator, load_silero_vad, silero_vad::utils_vad::{VadEvent, VadIteratorParams}};
 
+const MAX_RECORDING_SILENCE_FRAMES: u32 = 90;
+const MAX_SPEECH_BUFFER_SAMPLES: usize = 16_000 * 60;
 pub struct Listener {
     pub speach_buffer: Vec<i16>,
     pub oww_buffer: Vec<f32>,
@@ -11,7 +13,7 @@ pub struct Listener {
 }
 
 impl Listener {
-    pub fn new(path: &str, wake_word: &str, threshold: f32) -> Self {
+    pub fn new(path: &str, wake_word: String, threshold: f32) -> Self {
         let params = VadIteratorParams { 
             threshold: 0.2, 
             min_silence_duration_ms: 500, 
@@ -22,7 +24,7 @@ impl Listener {
                 "Failed to create iterator"
             );
 
-        let oww_model = OwwModel::from_file(path, wake_word.to_string(), threshold).expect(
+        let oww_model = OwwModel::from_file(path, wake_word, threshold).expect(
                 "Failed to load wakeword model"
             );
 
@@ -51,9 +53,16 @@ impl Listener {
 
     pub fn should_listen(&self) -> bool { return self.is_recording || self.silence_frames < 15 }
 
-    pub fn start_recording(&mut self) { self.is_recording = true; }
+    pub fn start_recording(&mut self) { 
+        self.is_recording = true;
+        self.silence_frames = 0;
+        self.vad_iterator.reset_states();    
+    }
 
-    pub fn stop_recording(&mut self) { self.is_recording = false; }
+    pub fn stop_recording(&mut self) { 
+        self.is_recording = false; 
+        self.vad_iterator.reset_states();
+    }
 
     pub fn process_idle_chunk(&mut self, chunk: &[i16]) {
         self.buffer_audio(chunk);
@@ -87,32 +96,45 @@ impl Listener {
     }
 
     pub fn process_vad_chunk(&mut self, chunk: &[i16]) -> Option<Vec<i16>> {
-
-            let chunkf32: Vec<f32> = chunk.iter().map(|&s| s as f32 / 32768.0).collect();
-            match self.vad_iterator.process_chunk(&chunkf32, true, 1) {
-                Ok(Some(VadEvent::Start(_ts))) => { 
-                    self.speach_buffer.extend(chunk); 
-                    return None;
-                },
-                Ok(Some(VadEvent::End(_ts))) => {
-                    self.stop_recording();
-                    let audio = std::mem::take(&mut self.speach_buffer);
+        if self.silence_frames > MAX_RECORDING_SILENCE_FRAMES {
+                println!("Recording timed out due to silence; returning to idle.");
+                self.stop_recording();
+                let audio = std::mem::take(&mut self.speach_buffer);
+                if audio.len() > 16000 {
+                    return Some(audio);
+                }
+                return None;
+            }
+        let chunkf32: Vec<f32> = chunk.iter().map(|&s| s as f32 / 32768.0).collect();
+        match self.vad_iterator.process_chunk(&chunkf32, true, 1) {
+            Ok(Some(VadEvent::Start(_ts))) => { 
+                self.speach_buffer.extend(chunk); 
+                return None;
+            },
+            Ok(Some(VadEvent::End(_ts))) => {
+                self.stop_recording();
+                let audio = std::mem::take(&mut self.speach_buffer);
                     
-                    if audio.len() > 16000 {
-                        return Some(audio);
-                    } else {
-                        return None;
-                    }
-                },
-                Ok(None) => { if self.is_recording { 
-                    self.speach_buffer.extend(chunk); 
-                    }
-                    return None;
-                },
-                Err(err) => {
-                    eprintln!("VAD Error: {}", err);
+                if audio.len() > 16000 {
+                    return Some(audio);
+                } else {
                     return None;
                 }
+            },
+            Ok(None) => { 
+                if self.is_recording { 
+                    self.speach_buffer.extend(chunk); 
+                    if self.speach_buffer.len() > MAX_SPEECH_BUFFER_SAMPLES {
+                        self.stop_recording();
+                        return Some(std::mem::take(&mut self.speach_buffer));
+                    }
+                }
+                return None;
+            },
+            Err(err) => {
+                eprintln!("VAD Error: {}", err);
+                return None;
             }
         }
+    }
 }

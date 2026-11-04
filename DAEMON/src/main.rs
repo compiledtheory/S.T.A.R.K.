@@ -1,12 +1,14 @@
 mod sensors;
 mod db;
 mod serial_speaker;
+mod serial_service;
 mod audio_service;
 mod stt;
 mod tts;
 mod llm;
 mod tools;
 mod audio_listener;
+mod events;
 
 use tokio::sync::broadcast;
 #[cfg(unix)]
@@ -14,7 +16,8 @@ use tokio::signal::unix::{signal, SignalKind};
 
 use std::sync::Arc;
 use serde_json::json;
-use crate::{llm::LLMHandler, sensors::SensorMessage};
+use crate::sensors::SensorEvent;
+use crate::llm::LLMHandler;
 use crate::audio_listener::Listener;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -26,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tts_speaking_flag = Arc::clone(&is_speaking);
     let llm_speaking_flag = Arc::clone(&is_speaking);
 
-    let (sensor_tx, mut db_rx) = broadcast::channel::<SensorMessage>(32);
+    let (serial_tx, _) = broadcast::channel::<SensorEvent>(64);
     
     match db::create_dbs() {
         Ok(_) => {println!("Databases created successfully.")}
@@ -36,19 +39,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    tokio::spawn(async move {
-        serial_speaker::read("/dev/ttyACM0", sensor_tx).await;
-    });
+    tokio::spawn(db::db_consumer(serial_tx.subscribe()));
+    tokio::spawn(events::event_handler(serial_tx.subscribe()));
+    
+    let nodes = serial_service::load_nodes();
+    tokio::spawn(async move { serial_speaker::read("/dev/ttyACM0", nodes, serial_tx).await; });
 
-    tokio::spawn(async move {
-        while let Ok(msg) = db_rx.recv().await {
-            let _ = db::store_data(msg).await;
-        }
-    });
-
+    let binding = std::env::var("MICROPHONE").expect("Microphone not set in .env");
+    let mic = binding.as_str();
 
     let (record_tx, mut record_rx) = tokio::sync::mpsc::channel::<Arc<[i16]>>(100);
-    let _record_stream = audio_service::record("TAM8", record_tx).await;
+    let _record_stream = audio_service::record(mic, record_tx).await;
 
     let (transcribe_tx, mut transcribe_rx) = tokio::sync::mpsc::channel::<String>(100);
     let stt_handler = Arc::new(stt::STTHandler::new());
@@ -57,8 +58,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::thread::spawn(move || {
 
         let mut listener = Listener::new(
-            "/home/compiledtheory/daemon/stark.onnx",
-            "hey jarvis",
+            std::env::var("ONNX_PATH").expect("ONNX path not set in .env").as_str(),
+            std::env::var("ONNX_NAME").expect("ONNX name not set in .env"),
             0.5
         );
 
@@ -66,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if listener_speaking_flag.load(Ordering::SeqCst) {
                 listener.clear_buffers();
                 listener.stop_recording();
-                continue; // Skip processing this audio chunk
+                continue;
             }
             
             listener.manage_silence(audio_service::check_silence(&pcm_chunk));
@@ -111,7 +112,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     while transcribe_rx.try_recv().is_ok() {}
                 },
                 Ok(None) => break, 
-                Err(_) => {llm_handler.wipe_memory();},
+                Err(_) => {
+                    llm_speaking_flag.store(false, Ordering::SeqCst);
+                    llm_handler.wipe_memory();
+                },
             }
         }
     });

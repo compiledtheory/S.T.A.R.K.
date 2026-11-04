@@ -1,17 +1,29 @@
 use serial2_tokio::SerialPort;
-use crate::sensors::SensorMessage;
+use crate::sensors::{SensorEvent, Node};
 use tokio::{io::{AsyncBufReadExt, BufReader}, sync::broadcast};
+use crate::serial_service::handle_frame;
+use std::collections::HashMap;
 
-fn handle_read(json: &str, tx: &broadcast::Sender<SensorMessage>) {
-    if json.is_empty() {return;}
-    
-    match serde_json::from_str::<SensorMessage>(json) {
-        Ok(msg) => {let _ = tx.send(msg);}
-        Err(e) => {eprintln!("Invalid JSON: {} - Error: {}", json, e)}
+
+fn handle_read(
+    line: &str, 
+    nodes: &HashMap<u8, Node>,
+    tx: &broadcast::Sender<SensorEvent>) {
+    let line = line.trim();
+    if line.is_empty() { return; }
+
+    match hex::decode(line) {
+        Ok(frame) => handle_frame(&frame, nodes, tx),
+        Err(err) => eprintln!("Bad frame: {}, Error: {}", line, err),
     }
 }
 
-pub async fn read(port: &str, tx: broadcast::Sender<SensorMessage>) {
+pub async fn read(
+    port: &str,
+    nodes: HashMap<u8, Node>, 
+    tx: broadcast::Sender<SensorEvent>
+
+) {
     let baud_rate = 115200;
     let serial_port = match SerialPort::open(port, baud_rate) {
         Ok(port) => port,
@@ -28,7 +40,7 @@ pub async fn read(port: &str, tx: broadcast::Sender<SensorMessage>) {
         line.clear();
         match reader.read_line(&mut line).await {
             Ok(0) => break,
-            Ok(_) => {handle_read(line.trim(), &tx);}
+            Ok(_) => {handle_read(line.trim(), &nodes, &tx);}
             Err(e) => {
                 eprintln!("Read error: {}", e);
                 break;

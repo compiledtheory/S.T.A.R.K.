@@ -1,0 +1,19 @@
+[[node]]
+id=1
+kind="pir"
+name="living room"
+
+[[node]]
+id=2
+kind="pir"
+name="bedroom"
+
+[[node]]
+id=3
+kind="pir"
+name="bathroom"
+
+[[node]]
+id=4
+kind="plant"
+name="ficus"
