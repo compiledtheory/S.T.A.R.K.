@@ -9,118 +9,40 @@ mod llm;
 mod tools;
 mod audio_listener;
 mod events;
+mod state;
 
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 #[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
 
 use std::sync::Arc;
-use serde_json::json;
+use crate::state::SystemState;
 use crate::sensors::SensorEvent;
-use crate::llm::LLMHandler;
-use crate::audio_listener::Listener;
-use std::sync::atomic::{AtomicBool, Ordering};
+
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
-    let is_speaking = Arc::new(AtomicBool::new(false));
-    let listener_speaking_flag = Arc::clone(&is_speaking);
-    let tts_speaking_flag = Arc::clone(&is_speaking);
-    let llm_speaking_flag = Arc::clone(&is_speaking);
 
+    let (state_tx, state_rx) = watch::channel(SystemState::Idle);
     let (serial_tx, _) = broadcast::channel::<SensorEvent>(64);
-    
-    match db::create_dbs() {
-        Ok(_) => {println!("Databases created successfully.")}
-        Err(e) => {
-            eprintln!("Failed to create databases: {}", e);
-            return Err(e.into());
-        }
-    }
+    let (record_tx, record_rx) = tokio::sync::mpsc::channel::<Arc<[i16]>>(100);
+    let (transcribe_tx, transcribe_rx) = tokio::sync::mpsc::channel::<String>(100);
+    let (speak_tx, speak_rx) = tokio::sync::mpsc::channel::<String>(100);
 
+    tokio::spawn(state::state_watchdog(state_rx.clone(), state_tx.clone()));
+    db::create_dbs().expect("Failed to initialize databases");
     tokio::spawn(db::db_consumer(serial_tx.subscribe()));
     tokio::spawn(events::event_handler(serial_tx.subscribe()));
     
     let nodes = serial_service::load_nodes();
     tokio::spawn(async move { serial_speaker::read("/dev/ttyACM0", nodes, serial_tx).await; });
 
-    let binding = std::env::var("MICROPHONE").expect("Microphone not set in .env");
-    let mic = binding.as_str();
+    let _record_stream = audio_service::record(&std::env::var("MICROPHONE").unwrap(), record_tx).await;
 
-    let (record_tx, mut record_rx) = tokio::sync::mpsc::channel::<Arc<[i16]>>(100);
-    let _record_stream = audio_service::record(mic, record_tx).await;
-
-    let (transcribe_tx, mut transcribe_rx) = tokio::sync::mpsc::channel::<String>(100);
-    let stt_handler = Arc::new(stt::STTHandler::new());
-    let rt_handle = tokio::runtime::Handle::current();
-
-    std::thread::spawn(move || {
-
-        let mut listener = Listener::new(
-            std::env::var("ONNX_PATH").expect("ONNX path not set in .env").as_str(),
-            std::env::var("ONNX_NAME").expect("ONNX name not set in .env"),
-            0.5
-        );
-
-        while let Some(pcm_chunk) = record_rx.blocking_recv() {
-            if listener_speaking_flag.load(Ordering::SeqCst) {
-                listener.clear_buffers();
-                listener.stop_recording();
-                continue;
-            }
-            
-            listener.manage_silence(audio_service::check_silence(&pcm_chunk));
-            
-            if listener.should_listen() {
-
-                if let Some(audio) = audio_service::listen(&mut listener, &pcm_chunk) {
-                    let stt = Arc::clone(&stt_handler);
-                    let tx = transcribe_tx.clone();
-
-                    rt_handle.spawn(async move {
-                    match stt.speech_to_text(&audio).await {
-                            Ok(text) => {
-                                println!("User: {}", text);
-                                let _ = tx.send(text).await;
-                            }
-                            Err(err) => eprintln!("STT Error: {}", err),
-                        }
-                    });
-                };
-            } else { listener.clear_buffers(); }
-            }
-    });
-
-    let (speak_tx, speak_rx) = tokio::sync::mpsc::channel::<String>(100);
-    tokio::spawn(async move {
-        let mut llm_handler = LLMHandler::new();
-        
-        loop {
-            match tokio::time::timeout(tokio::time::Duration::from_secs(60), transcribe_rx.recv()).await {
-                Ok(Some(msg)) => {
-                    if msg.trim().is_empty() {continue};
-                    llm_speaking_flag.store(true, Ordering::SeqCst);
-                    
-                    llm_handler.add_message(json!({
-                        "role": "user",
-                        "content": &msg
-                    }));
-
-                    llm::run_llm_turn(&mut llm_handler, speak_tx.clone()).await;
-                    
-                    while transcribe_rx.try_recv().is_ok() {}
-                },
-                Ok(None) => break, 
-                Err(_) => {
-                    llm_speaking_flag.store(false, Ordering::SeqCst);
-                    llm_handler.wipe_memory();
-                },
-            }
-        }
-    });
-
-    tts::tts_worker(speak_rx, tts_speaking_flag);
+    stt::stt_worker(record_rx, transcribe_tx, state_rx.clone(), state_tx.clone());
+    tokio::spawn(llm::llm_worker(transcribe_rx, speak_tx, state_rx.clone(), state_tx.clone()));
+    tts::tts_worker(speak_rx, state_tx.clone());
 
     println!("S.T.A.R.K. daemon is running. Press Ctrl+C to exit.");
     shutdown_signal().await;

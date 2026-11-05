@@ -1,7 +1,7 @@
 use oww_rs::oww::OwwModel;
 use silero_vad_rust::{VadIterator, load_silero_vad, silero_vad::utils_vad::{VadEvent, VadIteratorParams}};
 
-const MAX_RECORDING_SILENCE_FRAMES: u32 = 90;
+pub const MAX_RECORDING_SILENCE_FRAMES: u32 = 320;
 const MAX_SPEECH_BUFFER_SAMPLES: usize = 16_000 * 60;
 pub struct Listener {
     pub speach_buffer: Vec<i16>,
@@ -86,7 +86,7 @@ impl Listener {
        let result = self.oww_model.detection(current_chunk);
        if result.detected {
             self.start_recording();
-            self.speach_buffer.extend(chunk);
+
             self.oww_buffer.clear();
             for _ in 0..20 {
                 let _ = self.oww_model.detection(vec![0.0; 1280]);
@@ -99,6 +99,7 @@ impl Listener {
         if self.silence_frames > MAX_RECORDING_SILENCE_FRAMES {
                 println!("Recording timed out due to silence; returning to idle.");
                 self.stop_recording();
+                self.silence_frames = 0;
                 let audio = std::mem::take(&mut self.speach_buffer);
                 if audio.len() > 16000 {
                     return Some(audio);
@@ -108,6 +109,7 @@ impl Listener {
         let chunkf32: Vec<f32> = chunk.iter().map(|&s| s as f32 / 32768.0).collect();
         match self.vad_iterator.process_chunk(&chunkf32, true, 1) {
             Ok(Some(VadEvent::Start(_ts))) => { 
+                self.is_recording = true;
                 self.speach_buffer.extend(chunk); 
                 return None;
             },

@@ -1,9 +1,10 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::watch;
+use crate::state::SystemState;
+
 
 struct PiperProcess {
     _child: Child,
@@ -76,30 +77,28 @@ impl PiperProcess {
     }
 }
 
-pub fn tts_worker(mut rx: tokio::sync::mpsc::Receiver<String>, is_speaking: Arc<AtomicBool>) {
+pub fn tts_worker(mut rx: tokio::sync::mpsc::Receiver<String>, state_tx: watch::Sender<SystemState>) {
     std::thread::spawn(move || {
         let mut piper = PiperProcess::spawn("./en_US-ryan-medium.onnx");
         while let Some(raw_text) = rx.blocking_recv() {
             let clean = raw_text.replace(['\n', '\r'], " ").trim().to_string();
             if clean.is_empty() {
-                if rx.is_empty() { is_speaking.store(false, Ordering::SeqCst); }
+                if rx.is_empty() { let _ = state_tx.send(SystemState::Idle); }
                 continue;
             }
 
-            is_speaking.store(true, Ordering::SeqCst);
+            let _ = state_tx.send(SystemState::Speaking);
             piper.drain_stale_data();
 
             if let Err(err) = piper.synthesize(&clean) {
                 eprintln!("Failed to write text to Piper: {}", err);
-                is_speaking.store(false, Ordering::SeqCst);
+                let _ = state_tx.send(SystemState::Idle);
                 break;
             }
 
             play_sentence(&piper.audio_rx, &piper.stderr_rx);
             
-            if rx.is_empty() {
-                is_speaking.store(false, Ordering::SeqCst);
-            }
+            if rx.is_empty() { let _ = state_tx.send(SystemState::AwaitingReply); }
         }
     });
 }

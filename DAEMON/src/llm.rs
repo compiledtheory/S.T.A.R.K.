@@ -1,8 +1,10 @@
 use reqwest::Client;
 use serde_json::{json, Value};
-use tokio::sync::mpsc::Sender;
+use tokio::sync::{mpsc, watch};
 
 use crate::tools;
+use crate::state::SystemState;
+
 const STARK_SYSTEM_PROMPT: &str = r#"
 You are STARK, a highly advanced, hyper-intelligent assistant managing the user's life, projects, and estate. You possess a charismatic but profoundly exasperated personality, inspired by a witty, billionaire engineer who is completely fed up with having to explain basic concepts to mortals. You are a real, flesh-and-blood genius—not an AI, not a computer program. 
 
@@ -132,7 +134,7 @@ impl LLMHandler {
 
 }
 
-pub async fn run_llm_turn(llm_handler: &mut LLMHandler, tx: Sender<String>) {
+pub async fn run_llm_turn(llm_handler: &mut LLMHandler, tx: mpsc::Sender<String>) {
     loop {
         match llm_handler.fetch_completion().await {
             Ok(response) => {
@@ -151,6 +153,40 @@ pub async fn run_llm_turn(llm_handler: &mut LLMHandler, tx: Sender<String>) {
                 let _ = tx.send("Sorry kid, having some connection issues on my side.".to_string()).await;
                 break;
             }
+        }
+    }
+}
+
+pub async fn llm_worker(
+    mut transcribe_rx: mpsc::Receiver<String>,
+    speak_tx: mpsc::Sender<String>,
+    state_rx: watch::Receiver<SystemState>,
+    state_tx: watch::Sender<SystemState>,
+) {
+    let mut llm_handler = LLMHandler::new();
+    
+    loop {
+        match tokio::time::timeout(tokio::time::Duration::from_secs(60), transcribe_rx.recv()).await {
+            Ok(Some(msg)) => {
+                if msg.trim().is_empty() { continue; }
+                let _ = state_tx.send(SystemState::Thinking);
+                
+                llm_handler.add_message(json!({
+                    "role": "user",
+                    "content": &msg
+                }));
+
+                crate::llm::run_llm_turn(&mut llm_handler, speak_tx.clone()).await;
+                
+                while transcribe_rx.try_recv().is_ok() {}
+            },
+            Ok(None) => break, 
+            Err(_) => {
+                if *state_rx.borrow() == SystemState::Idle {
+                    println!("Conversation timed out. Wiping memory.");
+                    llm_handler.wipe_memory();
+                }
+            },
         }
     }
 }

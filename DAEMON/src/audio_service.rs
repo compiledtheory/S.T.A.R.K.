@@ -1,4 +1,5 @@
 use crate::audio_listener::Listener;
+use crate::state::SystemState;
 use std::sync::Arc;
 
 use cpal::{Device, StreamConfig, traits::{DeviceTrait, HostTrait, StreamTrait}};
@@ -14,9 +15,8 @@ pub fn check_silence(chunk: &[i16]) -> f32 {
     return (sum_squares / chunk.len() as f32).sqrt();
 }
 
-pub fn listen(listener: &mut Listener, chunk: &[i16]) -> Option<Vec<i16>> {
-
-    if listener.is_recording {
+pub fn listen(listener: &mut Listener, chunk: &[i16], state: SystemState) -> Option<Vec<i16>> {
+    if listener.is_recording || state == SystemState::AwaitingReply || state == SystemState::Listening {
         listener.process_vad_chunk(chunk)
     } else {
         listener.process_idle_chunk(chunk);
