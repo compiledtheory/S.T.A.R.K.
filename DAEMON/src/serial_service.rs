@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 
-use crate::{db, sensors::{Node, PirEvent, PlantData, Registry, SensorEvent}};
+use crate::{db, sensors::{Node, PirEvent, PlantData, Registry, SensorEvent, LD2450Event, MovementTarget}};
 
 
 const TYPE_PLANT:u8 = 1;
 const TYPE_PIR: u8 = 2;
+const TYPE_LD2450: u8 = 3;
 
 pub fn load_nodes() -> HashMap<u8, Node> {
     let txt = std::fs::read_to_string("/home/compiledtheory/daemon/nodes.toml").unwrap();
@@ -28,7 +29,8 @@ pub fn handle_frame(
             let _ = tx.send(SensorEvent::Plant(parse_plant(frame, node)));
 
         },
-        TYPE_PIR => { tx.send(SensorEvent::Pir(parse_pir(frame, node))); },
+        TYPE_PIR => { let _ = tx.send(SensorEvent::Pir(parse_pir(node))); },
+        TYPE_LD2450 => { let _ = tx.send(SensorEvent::LD2450(parse_ld2450(&frame[3..], node))); },
         _ => {},
     }
 }
@@ -37,6 +39,18 @@ fn parse_plant(frame: &[u8], node: &Node) -> PlantData {
     PlantData { sensor: node.id, plant: node.name.clone(), moisture: frame[2].into() }
 }
 
-fn parse_pir(frame: &[u8], node: &Node) -> PirEvent {
-    PirEvent { x: 3500, y: 4000 }
+fn parse_pir(node: &Node) -> PirEvent {
+    PirEvent { location: node.name.clone() }
+}
+
+fn parse_ld2450(frame: &[u8], node: &Node) -> LD2450Event {
+    let mut targets = Vec::<MovementTarget>::with_capacity(3);
+
+    for (id, chunk) in frame.chunks_exact(6).enumerate() {
+        let x = u16::from_le_bytes([chunk[0], chunk[1]]) as i16;
+        let y = u16::from_le_bytes([chunk[2], chunk[3]]) as i16;
+        let speed = u16::from_le_bytes([chunk[4], chunk[5]]) as i16;
+        targets.push( MovementTarget { x, y, speed })
+    }
+    LD2450Event { targets }
 }

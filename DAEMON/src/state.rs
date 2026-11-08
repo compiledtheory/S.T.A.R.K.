@@ -7,7 +7,6 @@ pub enum SystemState {
     Listening,
     Thinking,
     Speaking,
-    Muted,
     AwaitingReply,
 }
 

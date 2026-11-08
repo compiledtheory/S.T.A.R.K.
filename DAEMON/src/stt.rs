@@ -70,7 +70,7 @@ impl STTHandler {
 
 pub fn stt_worker(
     mut record_rx: mpsc::Receiver<Arc<[i16]>>,
-    transcribe_tx: mpsc::Sender<String>,
+    agent_tx: mpsc::Sender<String>,
     mut state_rx: watch::Receiver<SystemState>,
     state_tx: watch::Sender<SystemState>
 ) {
@@ -121,7 +121,7 @@ pub fn stt_worker(
             
             if let Some(audio) = audio_service::listen(&mut listener, &pcm_chunk, current_state) {
                 let stt = Arc::clone(&stt_handler);
-                let tx = transcribe_tx.clone();
+                let tx = agent_tx.clone();
                 let tx_state = state_tx.clone();
 
                 rt_handle.spawn(async move {

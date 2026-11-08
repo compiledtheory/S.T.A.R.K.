@@ -99,7 +99,9 @@ impl LLMHandler {
         Ok(reply)
     }
 
-    pub fn add_message(&mut self, message: serde_json::Value) { self.messages.push(message);}
+    pub fn add_message(&mut self, message: serde_json::Value) { self.messages.push(message); }
+
+    pub fn has_memory(&self) -> bool { self.messages.len() > 0 }
 
     pub fn wipe_memory(&mut self) {self.messages = Self::init_message()}
 
@@ -158,7 +160,7 @@ pub async fn run_llm_turn(llm_handler: &mut LLMHandler, tx: mpsc::Sender<String>
 }
 
 pub async fn llm_worker(
-    mut transcribe_rx: mpsc::Receiver<String>,
+    mut agent_rx: mpsc::Receiver<String>,
     speak_tx: mpsc::Sender<String>,
     state_rx: watch::Receiver<SystemState>,
     state_tx: watch::Sender<SystemState>,
@@ -166,7 +168,7 @@ pub async fn llm_worker(
     let mut llm_handler = LLMHandler::new();
     
     loop {
-        match tokio::time::timeout(tokio::time::Duration::from_secs(60), transcribe_rx.recv()).await {
+        match tokio::time::timeout(tokio::time::Duration::from_secs(60), agent_rx.recv()).await {
             Ok(Some(msg)) => {
                 if msg.trim().is_empty() { continue; }
                 let _ = state_tx.send(SystemState::Thinking);
@@ -178,13 +180,14 @@ pub async fn llm_worker(
 
                 crate::llm::run_llm_turn(&mut llm_handler, speak_tx.clone()).await;
                 
-                while transcribe_rx.try_recv().is_ok() {}
+                while agent_rx.try_recv().is_ok() {}
             },
             Ok(None) => break, 
             Err(_) => {
                 if *state_rx.borrow() == SystemState::Idle {
                     println!("Conversation timed out. Wiping memory.");
-                    llm_handler.wipe_memory();
+                    if llm_handler.has_memory() { llm_handler.wipe_memory(); }
+                    
                 }
             },
         }
