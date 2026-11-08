@@ -13,7 +13,7 @@
 #define PEER_CHANNEL 11
 #define MOTION_INTERVAL_MS 3000
 
-uint8_t broadcastAddress[] = {0x9C, 0x9E, 0x6E, 0xE2, 0xDE, 0x1C};
+uint8_t broadcastAddress[] = {0x80, 0x53, 0xE0, 0xB4, 0xE1, 0x28};
 
 esp_now_peer_info_t peerInfo;
 volatile bool packetSent = false;

@@ -55,6 +55,8 @@ void loop() {
   }
 
   if (!newDataReceived) return;
+  
+  digitalWrite(LED_PIN, LOW);
   newDataReceived = false;
   
   ledTurnedOnAt = millis();

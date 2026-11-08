@@ -5,7 +5,7 @@
 #include <vector>
 
 #define PACKET_TYPE 3
-#define NODE_ID 4
+#define NODE_ID 10
 #define LED_PIN 8
 #define RADAR_RX_PIN 4
 #define RADAR_TX_PIN 3
@@ -13,7 +13,8 @@
 
 HardwareSerial Radar(1);
 uint8_t headerBytes[] = {0xAA, 0xFF, 0x03, 0x00};
-uint8_t broadcastAddress[] = {0x9C, 0x9E, 0x6E, 0xE2, 0xDE, 0x1C};
+
+uint8_t broadcastAddress[] = {0x80, 0x53, 0xE0, 0xB4, 0xE1, 0x28};
 int headerIndex = 0;
 
 uint32_t lastPush = 0;
