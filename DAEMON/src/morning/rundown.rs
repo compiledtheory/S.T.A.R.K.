@@ -1,15 +1,16 @@
 use chrono::{DateTime, Local, NaiveDate};
 use serde_json::Value;
 use crate::morning::prompt::STARK_MORNING_CONTEXT;
+use crate::calendar::CalendarEvent;
 
 pub struct MorningContext {
     date: DateTime<Local>,
     location: String,
-    calendar_events: Vec<Value>,
+    calendar_events: Vec<CalendarEvent>,
 }
 
 impl MorningContext {
-    pub fn new(date: DateTime<Local>, location: String, calendar_events: Vec<Value>) -> Self {
+    pub fn new(date: DateTime<Local>, location: String, calendar_events: Vec<CalendarEvent>) -> Self {
         Self { date, location, calendar_events }
     }
 
@@ -25,6 +26,10 @@ impl MorningContext {
             return "No events scheduled for today.".to_string();
         }
 
-        return "".to_string();
+        self.calendar_events
+            .iter()
+            .map(|event| event.as_string())
+            .collect::<Vec<String>>()
+            .join("\n")
     }
 }

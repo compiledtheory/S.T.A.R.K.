@@ -51,8 +51,6 @@ impl Listener {
 
     pub fn increment_silence(&mut self) { self.silence_frames += 1; }
 
-    pub fn should_listen(&self) -> bool { return self.is_recording || self.silence_frames < 15 }
-
     pub fn start_recording(&mut self) { 
         self.is_recording = true;
         self.silence_frames = 0;
