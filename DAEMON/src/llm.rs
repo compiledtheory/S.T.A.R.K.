@@ -136,16 +136,32 @@ impl LLMHandler {
 
 }
 
-pub async fn run_llm_turn(llm_handler: &mut LLMHandler, tx: mpsc::Sender<String>) {
-    loop {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LLMOutputRoute {
+    TTS,
+    DISCORD,
+}
+
+pub struct LLMContext {
+    pub prompt: String,
+    pub out: LLMOutputRoute,
+}
+
+pub async fn run_llm_turn(
+    llm_handler: &mut LLMHandler, 
+    tx: mpsc::Sender<String>,
+) {
+    
+        loop {
         match llm_handler.fetch_completion().await {
             Ok(response) => {
                 match llm_handler.process_response(response).await {
                     Some(content) => {
                         if let Err(err) = tx.send(content).await {
                             eprintln!("Failed to send to TTS: {}", err)
-                        }
+                        }   
                         break;
+
                     }
                     None => { continue; }
                 }
@@ -160,8 +176,9 @@ pub async fn run_llm_turn(llm_handler: &mut LLMHandler, tx: mpsc::Sender<String>
 }
 
 pub async fn llm_worker(
-    mut agent_rx: mpsc::Receiver<String>,
+    mut agent_rx: mpsc::Receiver<LLMContext>,
     speak_tx: mpsc::Sender<String>,
+    discord_tx: mpsc::Sender<String>,
     state_rx: watch::Receiver<SystemState>,
     state_tx: watch::Sender<SystemState>,
 ) {
@@ -170,15 +187,19 @@ pub async fn llm_worker(
     loop {
         match tokio::time::timeout(tokio::time::Duration::from_secs(60), agent_rx.recv()).await {
             Ok(Some(msg)) => {
-                if msg.trim().is_empty() { continue; }
+                if msg.prompt.trim().is_empty() { continue; }
                 let _ = state_tx.send(SystemState::Thinking);
                 
                 llm_handler.add_message(json!({
                     "role": "user",
-                    "content": &msg
+                    "content": &msg.prompt
                 }));
 
-                crate::llm::run_llm_turn(&mut llm_handler, speak_tx.clone()).await;
+                let tx = if msg.out == LLMOutputRoute::TTS { speak_tx.clone() } else { discord_tx.clone() };
+                crate::llm::run_llm_turn(
+                    &mut llm_handler, 
+                    tx,
+                ).await;
                 
                 while agent_rx.try_recv().is_ok() {}
             },

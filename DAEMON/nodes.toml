@@ -17,3 +17,9 @@ name="bathroom"
 id=4
 kind="plant"
 name="ficus"
+moisture_threshold=80
+
+[[node]]
+id=10
+kind="ld2450"
+name="living room"

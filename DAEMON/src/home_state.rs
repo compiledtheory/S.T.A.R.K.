@@ -44,19 +44,18 @@ impl HomeState {
         
     }
 
-    pub fn register_rundown_complete(&mut self) {
-        self.last_morning_rundown = Some(Local::now().date_naive());
-    }
+    pub fn get_last_time_seen(&self) -> DateTime<Local> { self.last_motion_detected }
 
-    pub fn get_last_morning_rundown(&self) -> Option<NaiveDate> {
-        self.last_morning_rundown
-    }
+    pub fn register_rundown_complete(&mut self) { self.last_morning_rundown = Some(Local::now().date_naive()); }
+
+    pub fn get_last_morning_rundown(&self) -> Option<NaiveDate> { self.last_morning_rundown }
 }
 
 pub enum StateCommand {
     UpdateZone(String),
     RegisterRundown,
     CheckLastRundownDate(oneshot::Sender<Option<NaiveDate>>),
+    CheckLastMotionTime(oneshot::Sender<DateTime<Local>>),
 }
 
 pub async fn home_state_manager(mut rx: tokio::sync::mpsc::Receiver<StateCommand>) {
@@ -67,6 +66,7 @@ pub async fn home_state_manager(mut rx: tokio::sync::mpsc::Receiver<StateCommand
             StateCommand::UpdateZone(loc) => state.update_last_zone(&loc),
             StateCommand::RegisterRundown => state.register_rundown_complete(),
             StateCommand::CheckLastRundownDate(reply) => { let _ = reply.send(state.get_last_morning_rundown()); },
+            StateCommand::CheckLastMotionTime(reply) => { let _ = reply.send(state.get_last_time_seen()); }
         }
     }
 }

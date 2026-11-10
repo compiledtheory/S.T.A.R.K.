@@ -6,7 +6,6 @@ use crate::tools::WateringEventOneArgs;
 
 
 pub async fn save_plant(data: PlantData) -> Result<(), String> {
-    println!("plant: {} moisture: {}", data.plant, data.moisture);
     handle_write(tokio::task::spawn_blocking(move || add_plant(&data)).await)
 }
 

@@ -13,8 +13,10 @@ mod state;
 mod home_state;
 mod morning;
 mod calendar;
+mod plants;
+mod webhooks;
 
-use tokio::sync::{broadcast, watch, RwLock};
+use tokio::sync::{broadcast, watch};
 #[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
 
@@ -33,14 +35,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (home_state_tx, home_state_rx) = tokio::sync::mpsc::channel::<StateCommand>(32);
     let (serial_tx, _) = broadcast::channel::<SensorEvent>(64);
     let (record_tx, record_rx) = tokio::sync::mpsc::channel::<Arc<[i16]>>(100);
-    let (agent_tx, agent_rx) = tokio::sync::mpsc::channel::<String>(100);
+    let (agent_tx, agent_rx) = tokio::sync::mpsc::channel::<llm::LLMContext>(100);
     let (speak_tx, speak_rx) = tokio::sync::mpsc::channel::<String>(100);
     let (calendar_tx, calendar_rx) = tokio::sync::mpsc::channel::<CalendarCommand>(32);
+    let (discord_tx, discord_rx) = tokio::sync::mpsc::channel::<String>(100);
 
     tokio::spawn(state::state_watchdog(system_state_rx.clone(), system_state_tx.clone()));
     tokio::spawn(calendar::calendar_manager(calendar_rx));
     db::create_dbs().expect("Failed to initialize databases");
     
+    tokio::spawn(webhooks::discord::discord_webhook_worker(discord_rx));
     tokio::spawn(home_state_manager(home_state_rx));
     tokio::spawn(db::db_consumer(serial_tx.subscribe()));
     tokio::spawn(events::event_handler(serial_tx.subscribe(), home_state_tx, agent_tx.clone(), calendar_tx.clone()));
@@ -51,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _record_stream = audio_service::record(&std::env::var("MICROPHONE").unwrap(), record_tx).await;
 
     stt::stt_worker(record_rx, agent_tx, system_state_rx.clone(), system_state_tx.clone());
-    tokio::spawn(llm::llm_worker(agent_rx, speak_tx, system_state_rx.clone(), system_state_tx.clone()));
+    tokio::spawn(llm::llm_worker(agent_rx, speak_tx, discord_tx, system_state_rx.clone(), system_state_tx.clone()));
     tts::tts_worker(speak_rx, system_state_tx.clone());
 
     println!("S.T.A.R.K. daemon is running. Press Ctrl+C to exit.");

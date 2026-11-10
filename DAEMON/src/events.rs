@@ -1,14 +1,16 @@
 use tokio::sync::broadcast;
-use crate::sensors::{PirEvent, SensorEvent};
-use chrono::{DateTime, Local, NaiveDate};
+use crate::sensors::{PirEvent, SensorEvent, PlantData};
+use chrono::{Local, Duration};
 use crate::home_state::StateCommand;
 use crate::morning::rundown::MorningContext;
+use crate::plants::context::PlantContext;
 use crate::calendar::CalendarCommand;
+use crate::llm::{LLMContext, LLMOutputRoute};
 
 pub async fn event_handler(
     mut rx: broadcast::Receiver<SensorEvent>,
     home_state_tx: tokio::sync::mpsc::Sender<StateCommand>,
-    agent_tx: tokio::sync::mpsc::Sender<String>,
+    agent_tx: tokio::sync::mpsc::Sender<LLMContext>,
     calendar_tx: tokio::sync::mpsc::Sender<CalendarCommand>,
 ) {
     loop {
@@ -17,9 +19,7 @@ pub async fn event_handler(
             Ok(SensorEvent::LD2450(event)) => {
                 println!("{} Targets detected", event.targets.len());
             },
-            Ok(SensorEvent::Plant(event)) => {
-
-            },
+            Ok(SensorEvent::Plant(event)) => { handle_plant_events(&home_state_tx, &agent_tx, event).await },
             Err(err) => { eprintln!("error: {err}"); } 
         }
     }
@@ -27,7 +27,7 @@ pub async fn event_handler(
 
 async fn handle_pir_events(
     home_state_tx: &tokio::sync::mpsc::Sender<StateCommand>,
-    agent_tx: &tokio::sync::mpsc::Sender<String>,
+    agent_tx: &tokio::sync::mpsc::Sender<LLMContext>,
     calendar_tx: &tokio::sync::mpsc::Sender<CalendarCommand>,
     event: PirEvent, 
 ) { 
@@ -50,7 +50,7 @@ async fn handle_pir_events(
 
 async fn trigger_morning_rundown(
     home_state_tx: &tokio::sync::mpsc::Sender<StateCommand>,
-    agent_tx: &tokio::sync::mpsc::Sender<String>,
+    agent_tx: &tokio::sync::mpsc::Sender<LLMContext>,
     calendar_tx: &tokio::sync::mpsc::Sender<CalendarCommand>,
     event: PirEvent,
 ) {
@@ -70,7 +70,41 @@ async fn trigger_morning_rundown(
     }
 
     let context = MorningContext::new(Local::now(), event.location, todays_events);
-    if let Err(e) = agent_tx.send(context.format()).await {
+    if let Err(e) = agent_tx.send(create_llm_context(context.format(), true)).await {
         eprintln!("Failed to send morning prompt to LLM: {}", e);
+    }
+}
+
+async fn handle_plant_events(
+    home_state_tx: &tokio::sync::mpsc::Sender<StateCommand>,
+    agent_tx: &tokio::sync::mpsc::Sender<LLMContext>,
+    event: PlantData,
+) {
+    if event.moisture < event.threshold {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let mut is_home = false;
+        if let Err(e) = home_state_tx.send(StateCommand::CheckLastMotionTime(reply_tx)).await {
+            eprintln!("Failed to check if somebody is home, defaulting to Discord: {}", e);
+        } else {
+            if let Ok(last_seen) = reply_rx.await {
+                let ten_minutes_ago = Local::now() - Duration::try_minutes(1).expect("valid duration");
+                if last_seen > ten_minutes_ago { is_home = true; }
+            }
+        }
+        let plant_context = PlantContext::new(event.plant.clone(), event.moisture, event.threshold, is_home);
+        let context = create_llm_context(plant_context.format() ,is_home);
+
+        if let Err(e) = agent_tx.send(context).await {
+            eprintln!("Failed to send plant warning to LLM: {}", e);
+        }
+
+    }
+
+}
+
+fn create_llm_context(prompt: String, is_home: bool) -> LLMContext { 
+    LLMContext {
+        prompt,
+        out: if is_home { LLMOutputRoute::TTS } else { LLMOutputRoute::DISCORD }
     }
 }

@@ -19,7 +19,7 @@ pub async fn state_watchdog(
             if watchdog_rx.changed().await.is_err() { return; }
         }
 
-        match tokio::time::timeout(Duration::from_secs(8), watchdog_rx.changed()).await {
+        match tokio::time::timeout(Duration::from_secs(3), watchdog_rx.changed()).await {
             Ok(_) => {},
             Err(_) => {
                 println!("Hotmic timeout. Reverting to idle.");

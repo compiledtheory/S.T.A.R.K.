@@ -1,7 +1,7 @@
-use chrono::{Local, TimeZone};
+use chrono::Local;
 use tokio::sync::oneshot;
 use reqwest::Client;
-use yup_oauth2::{read_service_account_key, ServiceAccountAuthenticator};
+use yup_oauth2::read_service_account_key;
 use yup_oauth2::authenticator::Authenticator;
 use serde_json::Value;
 use yup_oauth2::hyper_rustls::HttpsConnector;

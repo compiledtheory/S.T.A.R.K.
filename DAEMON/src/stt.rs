@@ -7,6 +7,7 @@ use tokio::sync::{mpsc, watch};
 use crate::state::SystemState;
 use crate::audio_listener::{Listener, MAX_RECORDING_SILENCE_FRAMES};
 use crate::audio_service;
+use crate::llm::{LLMContext, LLMOutputRoute};
 
 pub struct STTHandler {
     client: Client,
@@ -70,7 +71,7 @@ impl STTHandler {
 
 pub fn stt_worker(
     mut record_rx: mpsc::Receiver<Arc<[i16]>>,
-    agent_tx: mpsc::Sender<String>,
+    agent_tx: mpsc::Sender<LLMContext>,
     mut state_rx: watch::Receiver<SystemState>,
     state_tx: watch::Sender<SystemState>
 ) {
@@ -129,7 +130,7 @@ pub fn stt_worker(
                     match stt.speech_to_text(&audio).await {
                         Ok(text) => {
                             println!("User: {}", text);
-                            let _ = tx.send(text).await;
+                            let _ = tx.send( LLMContext{ prompt: text, out: LLMOutputRoute::TTS }).await;
                         }
                         Err(err) => {
                             eprintln!("STT Error: {}", err);

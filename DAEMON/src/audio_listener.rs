@@ -65,7 +65,7 @@ impl Listener {
     pub fn process_idle_chunk(&mut self, chunk: &[i16]) {
         self.buffer_audio(chunk);
         while self.oww_buffer.len() >= 1280 {
-            self.detect_wake_word(chunk);
+            self.detect_wake_word();
         }
     }
 
@@ -79,7 +79,7 @@ impl Listener {
         self.oww_buffer.extend(chunk.iter().map(|&s| s as f32));
     }
 
-    fn detect_wake_word(&mut self, chunk: &[i16]) {
+    fn detect_wake_word(&mut self) {
        let current_chunk: Vec<f32> = self.oww_buffer.drain(0..1280).collect();
        let result = self.oww_model.detection(current_chunk);
        if result.detected {
