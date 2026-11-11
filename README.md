@@ -1,77 +1,72 @@
 # S.T.A.R.K. Daemon
-**A High-Performance, Event-Driven AI & Smart Home Engine**
 
-S.T.A.R.K. is a decoupled, highly concurrent central nervous system for localized smart home automation. Built entirely in Rust and orchestrated by Tokio, it seamlessly bridges bi-directional AI voice interaction with a custom ESP-NOW sensor telemetry network, Google Calendar integration, external webhooks, and a real-time spatial tracking frontend.
+S.T.A.R.K. is an event-driven smart home daemon built in Rust using Tokio. It handles local voice interaction, receives sensor data via a custom ESP-NOW network, integrates with Google Calendar, and serves a spatial tracking frontend.
 
-All subsystems—from the microphone hardware buffer to the SQLite database, the LLM context window, spatial coordinate streaming, and webhook routing—run asynchronously, passing messages through memory-safe channels synchronized by a central `watch` state machine.
+All subsystems—from the audio hardware buffer to the SQLite database, LLM processing, spatial coordinate streaming, and webhook routing—run asynchronously and communicate through channels managed by a central state machine.
 
 ---
 
 ## Architecture Overview
 
-The system is designed around specialized, independent workers that communicate strictly through asynchronous message passing.
-
-### The Message Bus
-Data flows through highly specific channels, completely decoupling producers from consumers:
+The system uses isolated async workers that communicate strictly through Tokio channels, decoupling producers from consumers:
 
 1. **`state_rx` / `state_tx`** (`tokio::sync::watch`)
-   The global state machine. Broadcasts the current operational phase to all workers instantly, muting microphones, or triggering timeouts.
+   The global state machine. Broadcasts the operational phase to workers (e.g., muting microphones, triggering timeouts).
 2. **`serial_tx`** (`tokio::sync::broadcast`)
-   Fans out incoming ESP-NOW `SensorEvent` payloads (PIR motion, mmWave spatial coordinates, plant moisture) to the database, spatial monitor, and the automation event handler.
+   Routes incoming ESP-NOW `SensorEvent` payloads (PIR, mmWave, moisture) to the database, spatial monitor, and event handler.
 3. **`home_state_tx`** (`tokio::sync::mpsc`)
-   Manages the global home context (e.g., active room presence, time-based conditions) so the LLM and automation engine are aware of the physical environment.
+   Tracks global physical context (room presence, time) for the LLM and automation rules.
 4. **`frontend_tx`** (`tokio::sync::broadcast`)
-   Streams normalized, JSON-formatted spatial telemetry to the Axum web server for Server-Sent Events (SSE) broadcasting.
+   Broadcasts normalized spatial telemetry to the Axum server for Server-Sent Events (SSE) streaming.
 5. **`calendar_tx`** (`tokio::sync::mpsc`)
-   Routes commands to the Google Calendar manager for fetching daily schedules or creating events asynchronously.
+   Handles Google Calendar API requests.
 6. **`record_tx`** (`tokio::sync::mpsc`)
-   Streams raw, 16-bit PCM audio chunks directly from the ALSA hardware buffer to the speech-to-text pipeline.
-7. **`transcribe_tx`** (`tokio::sync::mpsc`) *(Internal to audio pipeline)*
-   Passes fully transcribed user prompts from the STT engine to the LLM context manager.
+   Streams PCM audio chunks from the ALSA buffer to the STT worker.
+7. **`transcribe_tx`** (`tokio::sync::mpsc`)
+   Passes text transcriptions from the STT engine to the LLM worker.
 8. **`agent_tx`** (`tokio::sync::mpsc`)
-   Pushes the finalized contextual prompt (audio transcription + home state) into the LLM execution worker.
+   Pushes the prompt (transcription + home state) to the LLM.
 9. **`speak_tx`** (`tokio::sync::mpsc`)
-   Streams raw text from the LLM directly into the local Piper TTS engine for sub-second audio generation.
+   Sends LLM text to the Piper TTS engine for audio synthesis.
 10. **`discord_tx`** (`tokio::sync::mpsc`)
-    Routes silent text payloads to the webhook worker for off-screen notifications (e.g., plant moisture alerts when the room is empty).
+    Sends webhook payloads for off-screen notifications.
 
 ---
 
 ## The State Machine
 
-At the core of the daemon is the `SystemState` enum.
+The daemon operates on a `SystemState` enum:
 
-* `Idle`: The baseline state. System quietly listens for the openWakeWord (ONNX) trigger and logs sensor data.
-* `Listening`: Triggered by the wake word or the Hot Mic. Silero VAD actively captures user speech to a memory buffer.
-* `Thinking`: Audio is dispatched to the Whisper STT API; the LLM processes the transcription and begins streaming a response to the selected output route.
-* `Speaking`: The Piper TTS engine synthesizes audio. The microphone is automatically suppressed to prevent audio feedback.
-* `AwaitingReply` *(Hot Mic)*: After every TTS response, the system automatically bypasses the wake word pipeline and waits for a follow-up.
+* `Idle`: Baseline state. Listens for the openWakeWord (ONNX) trigger and logs sensor data.
+* `Listening`: Triggered by the wake word. Silero VAD captures user speech to a memory buffer.
+* `Thinking`: Audio is dispatched to the Whisper API; the LLM processes the transcription and streams a response.
+* `Speaking`: Piper TTS synthesizes audio. The microphone is suppressed to prevent feedback.
+* `AwaitingReply`: After a TTS response, the system bypasses the wake word pipeline and waits for a follow-up.
 
-**The Watchdog Task:** An isolated async task guarantees the system never gets stuck. If the system enters `AwaitingReply` and the user remains silent for 8 seconds, the watchdog gracefully resets the system to `Idle`.
+**Watchdog Task:** If the system enters `AwaitingReply` and no speech is detected for 8 seconds, the watchdog resets the state to `Idle`.
 
 ---
 
 ## Core Subsystems
 
 ### Audio & Speech Pipeline
-* **Wake Word & VAD:** Local, offline detection using `openWakeWord` and `Silero VAD`. Only clean, chunked speech is ever processed.
-* **STT (Speech-to-Text):** Connects to Groq's high-speed Whisper Large v3 API for instant, highly accurate transcription.
-* **TTS (Text-to-Speech):** Fully local voice synthesis using a Piper ONNX model. Piper runs as a managed subprocess, streaming raw bytes directly to the system's `aplay` buffer for near-zero latency playback.
+* **Wake Word & VAD:** Local detection using `openWakeWord` and `Silero VAD`.
+* **STT (Speech-to-Text):** Uses the Groq Whisper Large v3 API.
+* **TTS (Text-to-Speech):** Local voice synthesis using a Piper ONNX model, streaming directly to the `aplay` buffer.
 
 ### LLM Engine & Routing
-* Tracks conversational context, maintaining a rolling memory window.
-* Inactivity timeouts safely wipe memory after 60 seconds of silence, ensuring fresh context for new interactions.
-* **Dynamic Output Routing:** The `LLMOutputRoute` enum dictates whether the LLM's response goes to the `speak_tx` channel for audio playback or the `discord_tx` channel for silent notifications based on real-time room presence.
+* Maintains a rolling conversational context window.
+* Wipes memory after 60 seconds of inactivity.
+* **Output Routing:** Dictates whether the LLM's response is spoken via TTS or sent silently to Discord based on active room presence.
 
 ### ESP-NOW Sensor Network & Automation
-* **Serial Speaker:** Binds to `/dev/ttyACM0` to receive data from a central ESP32 receiver node.
-* **Low Overhead:** Uses a custom byte protocol for maximum speed and minimal microcontroller overhead.
-* **Decoupled Handlers:** Sensor events are broadcast to an SQLite `db_consumer` for historical tracking and an `event_handler` for real-time automation.
-* **Context-Aware Modules:** Dedicated subsystems for specific domains like Google Calendar integration and plant monitoring.
+* **Serial Speaker:** Reads data from `/dev/ttyACM0` connected to a central ESP32 receiver.
+* Uses a custom byte protocol to minimize microcontroller overhead.
+* Sensor events are logged to SQLite and evaluated by the event handler for automation rules.
 
 ### Spatial Tracking & Kiosk UI
-* **Telemetry Normalization:** The spatial monitor intercepts raw LD2450 mmWave coordinate data and normalizes it to a strictly bounded percentage grid.
-* **Zero-Latency Streaming:** An embedded Axum web server automatically consumes the `frontend_tx` broadcast channel and streams the coordinates over Server-Sent Events (SSE) directly to a local React kiosk interface.
+* **Telemetry Normalization:** Converts raw LD2450 mmWave coordinates to a bounded percentage grid.
+* **SSE Streaming:** An embedded Axum web server streams the normalized coordinates to a React kiosk UI.
 
 ---
 
