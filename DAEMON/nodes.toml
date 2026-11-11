@@ -2,6 +2,8 @@
 id=1
 kind="pir"
 name="living room"
+x=5000
+y=1000
 
 [[node]]
 id=2
