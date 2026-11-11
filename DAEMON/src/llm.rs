@@ -147,6 +147,15 @@ pub struct LLMContext {
     pub out: LLMOutputRoute,
 }
 
+impl LLMContext {
+    pub fn new(prompt: String, is_home: bool) -> Self {
+        Self {
+            prompt,
+            out: if is_home { LLMOutputRoute::TTS } else { LLMOutputRoute::DISCORD }
+        }
+    }
+}
+
 pub async fn run_llm_turn(
     llm_handler: &mut LLMHandler, 
     tx: mpsc::Sender<String>,

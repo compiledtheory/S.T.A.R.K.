@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::sensors::{Node, PirEvent, PlantData, Registry, SensorEvent, LD2450Event, MovementTarget};
+use crate::sensors::{Node,  PlantData, Registry, SensorEvent, MovementTarget, MotionEvent};
 
 
 const TYPE_PLANT:u8 = 1;
@@ -39,18 +39,26 @@ fn parse_plant(frame: &[u8], node: &Node) -> PlantData {
     PlantData { sensor: node.id, plant: node.name.clone(), moisture: frame[2].into(), threshold: node.moisture_threshold.unwrap_or(50).into() }
 }
 
-fn parse_pir(node: &Node) -> PirEvent {
-    PirEvent { location: node.name.clone() }
+fn parse_pir(node: &Node) -> MotionEvent {
+    let mut targets = Vec::<MovementTarget>::with_capacity(1);
+    targets.push( MovementTarget { 
+        x: node.x.unwrap_or(0) as i16, 
+        y: node.y.unwrap_or(0) as i16, 
+        speed: 0, 
+        location: node.name.clone() } );
+    
+    MotionEvent { targets }
 }
 
-fn parse_ld2450(count: u8, frame: &[u8]) -> LD2450Event {
+fn parse_ld2450(count: u8, frame: &[u8]) -> MotionEvent {
     let mut targets = Vec::<MovementTarget>::with_capacity(count.into());
 
     for (_, chunk) in frame.chunks_exact(6).enumerate() {
         let x = u16::from_le_bytes([chunk[0], chunk[1]]) as i16;
         let y = u16::from_le_bytes([chunk[2], chunk[3]]) as i16;
         let speed = u16::from_le_bytes([chunk[4], chunk[5]]) as i16;
-        targets.push( MovementTarget { x, y, speed })
+        targets.push( MovementTarget { x, y, speed, location: "living room".to_string() })
     }
-    LD2450Event { targets }
+
+    MotionEvent { targets }
 }

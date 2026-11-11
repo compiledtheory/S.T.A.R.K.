@@ -25,3 +25,7 @@ toml = "1.2.0"
 chrono = "0.4.45"
 yup-oauth2 = "12.1.2"
 hyper-util = "0.1.21"
+axum = "0.8.9"
+tower-http = { version = "0.7.1", features = ["fs"] }
+async-stream = "0.3.6"
+tokio-stream = { version = "0.1.19", features = ["sync"] }

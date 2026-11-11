@@ -14,6 +14,8 @@ pub struct Node {
     pub kind: String,
     pub name: String,
     pub moisture_threshold: Option<u16>,
+    pub x: Option<u16>,
+    pub y: Option<u16>,
 }
 
 #[derive(Deserialize)]
@@ -22,12 +24,7 @@ pub struct Registry {
 }
 
 #[derive(Clone, Deserialize)]
-pub struct PirEvent{
-    pub location: String,
-}
-
-#[derive(Clone, Deserialize)]
-pub struct LD2450Event{
+pub struct MotionEvent {
     pub targets: Vec<MovementTarget>,
 }
 
@@ -36,12 +33,13 @@ pub struct MovementTarget {
     pub x: i16,
     pub y: i16,
     pub speed: i16,
+    pub location: String,
 }
 
 
 #[derive(Clone)]
 pub enum SensorEvent {
     Plant(PlantData),
-    Pir(PirEvent),
-    LD2450(LD2450Event),
+    Pir(MotionEvent),
+    LD2450(MotionEvent),
 }

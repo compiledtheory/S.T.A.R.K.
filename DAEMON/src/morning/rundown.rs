@@ -1,5 +1,4 @@
-use chrono::{DateTime, Local, NaiveDate};
-use serde_json::Value;
+use chrono::{DateTime, Local};
 use crate::morning::prompt::STARK_MORNING_CONTEXT;
 use crate::calendar::CalendarEvent;
 

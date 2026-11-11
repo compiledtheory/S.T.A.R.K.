@@ -15,8 +15,10 @@ mod morning;
 mod calendar;
 mod plants;
 mod webhooks;
+mod spatial;
+mod frontend;
 
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, watch, mpsc};
 #[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
 
@@ -32,13 +34,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
 
     let (system_state_tx, system_state_rx) = watch::channel(SystemState::Idle);
-    let (home_state_tx, home_state_rx) = tokio::sync::mpsc::channel::<StateCommand>(32);
+    let (home_state_tx, home_state_rx) = mpsc::channel::<StateCommand>(32);
     let (serial_tx, _) = broadcast::channel::<SensorEvent>(64);
-    let (record_tx, record_rx) = tokio::sync::mpsc::channel::<Arc<[i16]>>(100);
-    let (agent_tx, agent_rx) = tokio::sync::mpsc::channel::<llm::LLMContext>(100);
-    let (speak_tx, speak_rx) = tokio::sync::mpsc::channel::<String>(100);
-    let (calendar_tx, calendar_rx) = tokio::sync::mpsc::channel::<CalendarCommand>(32);
-    let (discord_tx, discord_rx) = tokio::sync::mpsc::channel::<String>(100);
+    let (record_tx, record_rx) = mpsc::channel::<Arc<[i16]>>(100);
+    let (agent_tx, agent_rx) = mpsc::channel::<llm::LLMContext>(100);
+    let (speak_tx, speak_rx) = mpsc::channel::<String>(100);
+    let (calendar_tx, calendar_rx) = mpsc::channel::<CalendarCommand>(32);
+    let (discord_tx, discord_rx) = mpsc::channel::<String>(100);
+    let (frontend_tx, _) = broadcast::channel::<String>(100);
 
     tokio::spawn(state::state_watchdog(system_state_rx.clone(), system_state_tx.clone()));
     tokio::spawn(calendar::calendar_manager(calendar_rx));
@@ -48,6 +51,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(home_state_manager(home_state_rx));
     tokio::spawn(db::db_consumer(serial_tx.subscribe()));
     tokio::spawn(events::event_handler(serial_tx.subscribe(), home_state_tx, agent_tx.clone(), calendar_tx.clone()));
+    tokio::spawn(spatial::monitor::start(serial_tx.subscribe(), frontend_tx.clone()));
+    tokio::spawn(frontend::server::start(frontend_tx));
     
     let nodes = serial_service::load_nodes();
     tokio::spawn(async move { serial_speaker::read("/dev/ttyACM0", nodes, serial_tx).await; });
