@@ -1,9 +1,9 @@
 # S.T.A.R.K. Daemon
 **A High-Performance, Event-Driven AI & Smart Home Engine**
 
-S.T.A.R.K. is a decoupled, highly concurrent central nervous system for localized smart home automation. Built entirely in Rust and orchestrated by Tokio, it seamlessly bridges bi-directional AI voice interaction with a custom ESP-NOW sensor telemetry network, Google Calendar integration, and external webhooks.
+S.T.A.R.K. is a decoupled, highly concurrent central nervous system for localized smart home automation. Built entirely in Rust and orchestrated by Tokio, it seamlessly bridges bi-directional AI voice interaction with a custom ESP-NOW sensor telemetry network, Google Calendar integration, external webhooks, and a real-time spatial tracking frontend.
 
-All subsystems—from the microphone hardware buffer to the SQLite database, the LLM context window, and webhook routing—run asynchronously, passing messages through memory-safe channels synchronized by a central `watch` state machine.
+All subsystems—from the microphone hardware buffer to the SQLite database, the LLM context window, spatial coordinate streaming, and webhook routing—run asynchronously, passing messages through memory-safe channels synchronized by a central `watch` state machine.
 
 ---
 
@@ -17,21 +17,23 @@ Data flows through highly specific channels, completely decoupling producers fro
 1. **`state_rx` / `state_tx`** (`tokio::sync::watch`)
    The global state machine. Broadcasts the current operational phase to all workers instantly, muting microphones, or triggering timeouts.
 2. **`serial_tx`** (`tokio::sync::broadcast`)
-   Fans out incoming ESP-NOW `SensorEvent` payloads (PIR motion, mmWave spatial coordinates, plant moisture) to the database and the automation event handler.
+   Fans out incoming ESP-NOW `SensorEvent` payloads (PIR motion, mmWave spatial coordinates, plant moisture) to the database, spatial monitor, and the automation event handler.
 3. **`home_state_tx`** (`tokio::sync::mpsc`)
    Manages the global home context (e.g., active room presence, time-based conditions) so the LLM and automation engine are aware of the physical environment.
-4. **`calendar_tx`** (`tokio::sync::mpsc`)
+4. **`frontend_tx`** (`tokio::sync::broadcast`)
+   Streams normalized, JSON-formatted spatial telemetry to the Axum web server for Server-Sent Events (SSE) broadcasting.
+5. **`calendar_tx`** (`tokio::sync::mpsc`)
    Routes commands to the Google Calendar manager for fetching daily schedules or creating events asynchronously.
-5. **`record_tx`** (`tokio::sync::mpsc`)
+6. **`record_tx`** (`tokio::sync::mpsc`)
    Streams raw, 16-bit PCM audio chunks directly from the ALSA hardware buffer to the speech-to-text pipeline.
-6. **`transcribe_tx`** (`tokio::sync::mpsc`) *(Internal to audio pipeline)*
+7. **`transcribe_tx`** (`tokio::sync::mpsc`) *(Internal to audio pipeline)*
    Passes fully transcribed user prompts from the STT engine to the LLM context manager.
-7. **`agent_tx`** (`tokio::sync::mpsc`)
+8. **`agent_tx`** (`tokio::sync::mpsc`)
    Pushes the finalized contextual prompt (audio transcription + home state) into the LLM execution worker.
-8. **`speak_tx`** (`tokio::sync::mpsc`)
+9. **`speak_tx`** (`tokio::sync::mpsc`)
    Streams raw text from the LLM directly into the local Piper TTS engine for sub-second audio generation.
-9. **`discord_tx`** (`tokio::sync::mpsc`)
-   Routes silent text payloads to the webhook worker for off-screen notifications (e.g., plant moisture alerts when the room is empty).
+10. **`discord_tx`** (`tokio::sync::mpsc`)
+    Routes silent text payloads to the webhook worker for off-screen notifications (e.g., plant moisture alerts when the room is empty).
 
 ---
 
@@ -67,23 +69,34 @@ At the core of the daemon is the `SystemState` enum.
 * **Decoupled Handlers:** Sensor events are broadcast to an SQLite `db_consumer` for historical tracking and an `event_handler` for real-time automation.
 * **Context-Aware Modules:** Dedicated subsystems for specific domains like Google Calendar integration and plant monitoring.
 
+### Spatial Tracking & Kiosk UI
+* **Telemetry Normalization:** The spatial monitor intercepts raw LD2450 mmWave coordinate data and normalizes it to a strictly bounded percentage grid.
+* **Zero-Latency Streaming:** An embedded Axum web server automatically consumes the `frontend_tx` broadcast channel and streams the coordinates over Server-Sent Events (SSE) directly to a local React kiosk interface.
+
 ---
 
 ## Project Structure
 
 ```text
 src/
+├── frontend/            # Axum web server and UI hosting
+│   ├── mod.rs          
+│   └── server.rs       
 ├── morning/             # Morning routine logic
-│   ├── mod.rs           
-│   ├── prompts.rs       
-│   └── rundown.rs       
+│   ├── mod.rs          
+│   ├── prompts.rs      
+│   └── rundown.rs      
 ├── plants/              # Plant telemetry and moisture thresholds
-│   ├── context.rs       
-│   ├── mod.rs           
-│   └── prompt.rs        
+│   ├── context.rs      
+│   ├── mod.rs          
+│   └── prompt.rs       
+├── spatial/             # mmWave radar telemetry and normalization
+│   ├── mod.rs          
+│   ├── monitor.rs      
+│   └── position.rs     
 ├── webhooks/            # External API notification routing
-│   ├── discord.rs       
-│   └── mod.rs           
+│   ├── discord.rs      
+│   └── mod.rs          
 ├── audio_listener.rs    # Wake word and Silero VAD state buffers
 ├── audio_service.rs     # cpal microphone interfacing
 ├── calendar.rs          # Google Calendar API integration
