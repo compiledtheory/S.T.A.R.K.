@@ -90,7 +90,7 @@ src/
 │   ├── context.rs      
 │   ├── mod.rs          
 │   └── prompt.rs       
-├── spatial/             # mmWave radar telemetry and normalization
+├── spatial/             # radar telemetry and normalization
 │   ├── mod.rs          
 │   ├── monitor.rs      
 │   └── position.rs     
